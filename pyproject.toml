@@ -13,6 +13,7 @@ dependencies = [
   "langchain-google-genai>=4.0,<5",
   "langchain-huggingface>=1.0,<2",
   "langchain-text-splitters>=1.0,<2",
+  "langsmith>=0.3.45,<1",
   "pandas>=2.2,<3",
   "pydantic>=2.10,<3",
   "pypdf>=5,<7",
