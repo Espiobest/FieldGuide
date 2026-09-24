@@ -19,6 +19,14 @@ def parser() -> argparse.ArgumentParser:
     ingest.add_argument("--chunk-size", type=int, default=1000)
     ingest.add_argument("--overlap", type=int, default=150)
     ingest.add_argument("--embedding-model", default="sentence-transformers/all-MiniLM-L6-v2")
+    export = commands.add_parser("export-pages", help="Export document pages for Spark ingestion")
+    export.add_argument("folder", type=Path)
+    export.add_argument("--output", type=Path, required=True)
+    imported = commands.add_parser("import-chunks", help="Index chunks exported from Spark")
+    imported.add_argument("file", type=Path)
+    imported.add_argument("--index", type=Path, default=Path("index/imported"))
+    imported.add_argument("--public", action="store_true")
+    imported.add_argument("--embedding-model", default="sentence-transformers/all-MiniLM-L6-v2")
     for name, help_text in (
         ("search", "Retrieve chunks locally without an API"),
         ("ask", "Return a verified answer with citations"),
@@ -74,6 +82,28 @@ def run(args) -> int:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     from fieldguide.store import LocalIndex
 
+    if args.command == "export-pages":
+        from fieldguide.chunk_io import export_pages
+
+        count, warnings = export_pages(args.folder, args.output)
+        print(f"Exported {count} page records to {args.output}. No files were uploaded.")
+        for warning in warnings:
+            print(f"Warning: {warning}", file=sys.stderr)
+        return 0
+    if args.command == "import-chunks":
+        from fieldguide.chunk_io import import_chunks
+
+        documents, size, overlap = import_chunks(args.file)
+        LocalIndex.build(
+            documents,
+            args.index,
+            model=args.embedding_model,
+            public=args.public,
+            chunk_size=size,
+            chunk_overlap=overlap,
+        )
+        print(f"Indexed {len(documents)} imported chunks into {args.index}.")
+        return 0
     if args.command == "ingest":
         from fieldguide.ingest import chunk_documents, read_documents
 

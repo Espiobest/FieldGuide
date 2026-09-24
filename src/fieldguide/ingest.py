@@ -4,7 +4,6 @@ import hashlib
 from pathlib import Path
 
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 SUPPORTED = {".pdf", ".docx", ".md", ".txt"}
 
@@ -66,6 +65,8 @@ def read_documents(folder: Path) -> tuple[list[Document], list[str]]:
 def chunk_documents(
     documents: list[Document], size: int = 1000, overlap: int = 150
 ) -> list[Document]:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
     if size < 100 or overlap < 0 or overlap >= size:
         raise ValueError("Chunk size must be >= 100 and 0 <= overlap < size.")
     splitter = RecursiveCharacterTextSplitter(
