@@ -1,0 +1,166 @@
+"""Command-line entry points."""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(description="FieldGuide: grounded field-document Q&A")
+    commands = root.add_subparsers(dest="command", required=True)
+    ingest = commands.add_parser("ingest", help="Index a document folder locally")
+    ingest.add_argument("folder", type=Path)
+    ingest.add_argument("--index", type=Path, default=Path("index/private"))
+    ingest.add_argument("--public", action="store_true", help="Declare this corpus public")
+    ingest.add_argument("--chunk-size", type=int, default=1000)
+    ingest.add_argument("--overlap", type=int, default=150)
+    ingest.add_argument("--embedding-model", default="sentence-transformers/all-MiniLM-L6-v2")
+    for name, help_text in (
+        ("search", "Retrieve chunks locally without an API"),
+        ("ask", "Return a verified answer with citations"),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument("question")
+        command.add_argument("--index", type=Path, default=Path("index/sample"))
+        command.add_argument("--k", type=int, default=5)
+        command.add_argument("--source", help="Filter by source filename substring")
+        command.add_argument("--json", action="store_true")
+        if name == "ask":
+            command.add_argument("--model")
+            command.add_argument("--allow-private-api", action="store_true")
+            command.add_argument("--show-context", action="store_true")
+    evaluate = commands.add_parser("eval", help="Run fixed evaluation cases")
+    evaluate.add_argument("--cases", type=Path, default=Path("eval/sample_questions.json"))
+    evaluate.add_argument("--index", type=Path, default=Path("index/sample"))
+    evaluate.add_argument("--output", type=Path, default=Path("reports/eval"))
+    evaluate.add_argument("--retrieval-only", action="store_true")
+    evaluate.add_argument("--no-judge", action="store_true")
+    evaluate.add_argument("--allow-private-api", action="store_true")
+    evaluate.add_argument("--model")
+    evaluate.add_argument("--judge-model")
+    evaluate.add_argument("--k", type=int, default=5)
+    overview = commands.add_parser("overview", help="Cluster chunks into local topic groups")
+    overview.add_argument("--index", type=Path, default=Path("index/sample"))
+    overview.add_argument("--clusters", type=int, default=4)
+    return root
+
+
+def print_sources(sources: list[dict], show_context: bool = False):
+    for source in sources:
+        page = f", page {source['page']}" if source.get("page") else ""
+        print(
+            f"[{source['id']}] {source['source']}{page} | chunk {source['chunk_id']} "
+            f"| similarity {source['score']:.3f}"
+        )
+        if show_context:
+            print(source["text"] + "\n")
+
+
+def run(args) -> int:
+    from fieldguide.store import LocalIndex
+
+    if args.command == "ingest":
+        from fieldguide.ingest import chunk_documents, read_documents
+
+        documents, warnings = read_documents(args.folder)
+        chunks = chunk_documents(documents, args.chunk_size, args.overlap)
+        LocalIndex.build(
+            chunks,
+            args.index,
+            model=args.embedding_model,
+            public=args.public,
+            chunk_size=args.chunk_size,
+            chunk_overlap=args.overlap,
+        )
+        print(
+            f"Indexed {len(chunks)} chunks from "
+            f"{len({d.metadata['source'] for d in documents})} documents into {args.index}."
+        )
+        for warning in warnings:
+            print(f"Warning: {warning}", file=sys.stderr)
+        return 0
+    if not (args.index / "manifest.json").is_file():
+        raise ValueError(f"No index at {args.index}. Run fieldguide ingest first.")
+    if args.command == "ask" or (args.command == "eval" and not args.retrieval_only):
+        from fieldguide.agents import require_api_permission
+
+        manifest = json.loads((args.index / "manifest.json").read_text(encoding="utf-8"))
+        require_api_permission(manifest, args.allow_private_api)
+    index = LocalIndex.load(args.index, embed=args.command != "overview")
+    if args.command == "overview":
+        from fieldguide.overview import corpus_overview
+
+        print(corpus_overview(index, args.clusters).to_string(index=False))
+        return 0
+    if args.command == "eval":
+        from fieldguide.agents import GroundedQA, make_chains
+        from fieldguide.evaluate import make_judge, run_evaluation, summary
+
+        qa = None if args.retrieval_only else GroundedQA(*make_chains(args.model))
+        judge = (
+            None
+            if args.retrieval_only or args.no_judge
+            else make_judge(args.judge_model or args.model)
+        )
+        frame, details = run_evaluation(index, args.cases, qa=qa, judge=judge, k=args.k)
+        args.output.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(args.output / "scores.csv", index=False)
+        (args.output / "details.json").write_text(
+            json.dumps(
+                {
+                    "index": index.manifest,
+                    "model": args.model or os.getenv("FIELDGUIDE_MODEL", "gemini-2.5-flash"),
+                    "k": args.k,
+                    "results": details,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        report = summary(frame)
+        print(report)
+        (args.output / "summary.txt").write_text(report, encoding="utf-8")
+        return 1 if (frame.status == "error").any() else 0
+    sources = index.search(args.question, k=args.k, source=args.source)
+    if args.command == "search":
+        if args.json:
+            print(json.dumps(sources, indent=2, ensure_ascii=False))
+        else:
+            print_sources(sources, show_context=True)
+        return 0
+    from fieldguide.agents import GroundedQA, make_chains
+
+    result = GroundedQA(*make_chains(args.model)).answer(args.question, sources)
+    if args.json:
+        print(result.model_dump_json(indent=2))
+    else:
+        print(f"Status: {result.status} | attempts: {result.attempts}\n\n{result.text}\n")
+        print_sources(result.sources, show_context=args.show_context)
+    return 0 if result.status == "verified" else 2
+
+
+def main():
+    load_dotenv(Path.cwd() / ".env")
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    args = parser().parse_args()
+    try:
+        code = run(args)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        code = 1
+    except KeyboardInterrupt:
+        code = 130
+    except Exception as exc:
+        print(
+            f"Error ({type(exc).__name__}): operation failed. Check your model, API key, "
+            "quota, network connection, or rebuild the index.",
+            file=sys.stderr,
+        )
+        code = 1
+    sys.exit(code)
