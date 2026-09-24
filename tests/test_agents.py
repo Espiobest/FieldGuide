@@ -8,6 +8,7 @@ from fieldguide.agents import (
     Evidence,
     GroundedQA,
     Verdict,
+    evidence_errors,
     require_api_permission,
 )
 
@@ -79,6 +80,7 @@ def test_real_quote_does_not_bypass_semantic_verification():
     result = GroundedQA(FakeChain(wrong, wrong), verifier).answer("What size?", SOURCES)
     assert result.status == "abstained" and result.text == ABSTENTION
     assert not result.claims and not result.sources
+    assert result.abstention_reason == "verification_rejected"
     assert "9 m" not in result.text
 
 
@@ -103,6 +105,7 @@ def test_missing_verifier_checks_fail_closed(checks):
 def test_no_context_never_calls_model():
     result = GroundedQA(FakeChain(), FakeChain()).answer("Unknown?", [])
     assert result.status == "abstained" and result.attempts == 0
+    assert result.abstention_reason == "no_context"
 
 
 def test_model_abstention_never_returns_unverified_claims():
@@ -125,3 +128,32 @@ def test_private_index_needs_explicit_api_permission(monkeypatch):
         require_api_permission({"public": False})
     require_api_permission({"public": True})
     require_api_permission({"public": False}, allow_private=True)
+
+
+def test_pdf_spacing_does_not_reject_matching_evidence():
+    sources = [{**SOURCES[0], "text": "Use a 1 m quadrat . Record NA for missing values ."}]
+    verifier = FakeChain(verdict())
+    result = GroundedQA(FakeChain(draft()), verifier).answer("What size?", sources)
+    assert result.status == "verified"
+    assert len(verifier.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "source,quote",
+    [
+        ("Use a 1 m quadrat .", "Use a 9 m quadrat."),
+        ("Do not estimate values .", "Do estimate values."),
+        ("Record 1 . 5 m .", "Record 1.5 m."),
+        ("Record 1 .5 m .", "Record 1.5 m."),
+        ("Record 1,5 m .", "Record 1.5 m."),
+    ],
+)
+def test_quote_normalization_preserves_meaning(source, quote):
+    assert evidence_errors(draft(quote=quote), [{**SOURCES[0], "text": source}])
+
+
+def test_quote_failure_explains_abstention():
+    result = GroundedQA(
+        FakeChain(draft(quote="Invented"), draft(quote="Invented")), FakeChain()
+    ).answer("What size?", SOURCES)
+    assert result.abstention_reason == "invalid_citations"

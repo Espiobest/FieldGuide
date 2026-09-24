@@ -34,7 +34,7 @@ Question --> retrieve relevant chunks
 
 The answerer and verifier are separate chains with separate prompts and structured outputs. They use the same configured Gemini model by default; they are distinct roles, not independently trained models. Verification rejects unsupported claims, altered quantities, missing qualifications, and incompatible organization or revision scopes. A second attempt receives stricter feedback. If verification still fails, the CLI abstains.
 
-Source citations include the relative filename, stable chunk ID, and PDF page when available. Similarity scores describe retrieval similarity, not answer confidence. Verification reduces unsupported output but does not guarantee correctness; researchers should review the cited SOP before applying a procedure.
+Evidence quotes must match the cited chunk, allowing whitespace differences and PDF extraction spaces before sentence punctuation. Source citations include the relative filename, stable chunk ID, and PDF page when available. Similarity scores describe retrieval similarity, not answer confidence. Verification reduces unsupported output but does not guarantee correctness; researchers should review the cited SOP before applying a procedure.
 
 ## Install
 
@@ -85,7 +85,7 @@ Use a 1 m by 1 m quadrat at each marked training plot. [S1]
 [S1] vegetation_training.md | chunk <chunk ID> | similarity <score>
 ```
 
-If evidence is insufficient, the CLI returns: “I could not verify an answer from the retrieved documents. Check the source SOP.” An `ask` command exits with code 0 for a verified answer, 2 for abstention, and 1 for an operational error.
+If evidence is insufficient, the CLI returns: “I could not verify an answer from the retrieved documents. Check the source SOP.” The CLI also reports whether retrieval found no context, the answerer lacked evidence, citation matching failed, or the verifier rejected the answer. Use `--show-context` to inspect retrieved passages after an abstention, or `--source vegetation` to focus on a particular SOP. An `ask` command exits with code 0 for a verified answer, 2 for abstention, and 1 for an operational error.
 
 ## Use private SOPs
 

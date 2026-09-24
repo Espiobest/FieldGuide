@@ -140,7 +140,20 @@ def run(args) -> int:
         print(result.model_dump_json(indent=2))
     else:
         print(f"Status: {result.status} | attempts: {result.attempts}\n\n{result.text}\n")
-        print_sources(result.sources, show_context=args.show_context)
+        if result.status == "abstained":
+            reasons = {
+                "no_context": "No chunks matched the selected source.",
+                "insufficient_evidence": "The answerer found insufficient evidence in the chunks.",
+                "invalid_citations": "The draft's evidence quotes did not match the cited chunks.",
+                "verification_rejected": "The verifier did not approve every claim in the answer.",
+            }
+            print(f"Reason: {reasons.get(result.abstention_reason, 'Evidence checks failed.')}")
+            print("Use --show-context to inspect retrieval or --source to select a specific SOP.")
+            if args.show_context:
+                print("\nRetrieved context (not a verified answer):")
+                print_sources(result.retrieved, show_context=True)
+        else:
+            print_sources(result.sources, show_context=args.show_context)
     return 0 if result.status == "verified" else 2
 
 

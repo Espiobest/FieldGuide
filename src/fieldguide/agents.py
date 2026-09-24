@@ -49,6 +49,10 @@ class Answer(BaseModel):
     retrieved: list[dict]
     claims: list[Claim] = Field(default_factory=list)
     checks: list[ClaimCheck] = Field(default_factory=list)
+    abstention_reason: (
+        Literal["no_context", "insufficient_evidence", "invalid_citations", "verification_rejected"]
+        | None
+    ) = None
 
 
 ANSWER_PROMPT = """You are the answerer for FieldGuide, a document Q&A assistant used
@@ -116,7 +120,9 @@ def make_chains(model: str | None = None):
 
 
 def normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    # PDF extraction can insert spaces before sentence punctuation.
+    return re.sub(r" +([.,;:!?])(?=\s|$)", r"\1", text)
 
 
 def evidence_errors(draft: Draft, sources: list[dict]) -> list[str]:
@@ -157,9 +163,10 @@ class GroundedQA:
             question=question, status="abstained", text=ABSTENTION, sources=[], retrieved=sources
         )
         if not sources:
-            return Answer(**fallback, attempts=0)
+            return Answer(**fallback, attempts=0, abstention_reason="no_context")
         context = json.dumps(sources, ensure_ascii=False)
         feedback = "First attempt."
+        reason = "verification_rejected"
         for attempt in range(1, self.max_attempts + 1):
             with tracing_context(enabled=False):
                 draft = Draft.model_validate(
@@ -172,9 +179,12 @@ class GroundedQA:
                     )
                 )
             if not draft.answerable:
-                return Answer(**fallback, attempts=attempt)
+                return Answer(
+                    **fallback, attempts=attempt, abstention_reason="insufficient_evidence"
+                )
             errors = evidence_errors(draft, sources)
             if errors:
+                reason = "invalid_citations"
                 feedback = "Stricter retry: " + " ".join(errors)
                 continue
             with tracing_context(enabled=False):
@@ -203,13 +213,14 @@ class GroundedQA:
                     claims=draft.claims,
                     checks=verdict.checks,
                 )
+            reason = "verification_rejected"
             feedback = (
                 "Stricter retry: "
                 + verdict.feedback
                 + " "
                 + " ".join(check.reason for check in verdict.checks if not check.supported)
             )
-        return Answer(**fallback, attempts=self.max_attempts)
+        return Answer(**fallback, attempts=self.max_attempts, abstention_reason=reason)
 
 
 def require_api_permission(manifest: dict, allow_private: bool = False):
