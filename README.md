@@ -74,7 +74,7 @@ fieldguide overview --index index/sample --clusters 3
 
 `python -m fieldguide` also works in place of `fieldguide`. Use `--json` with `ask` or `search` for machine-readable results. `--k` sets the number of retrieved chunks, and `--source` restricts retrieval to filenames containing the supplied text.
 
-Illustrative answer formatting for the fictional vegetation document, **not a captured live run or measured result**:
+Example answer format using the fictional vegetation document:
 
 ```text
 Question: How big is the training quadrat?
@@ -106,7 +106,7 @@ fieldguide ask "What should an intern record at each plot?" --index index/privat
 
 The equivalent persistent setting is `FIELDGUIDE_ALLOW_PRIVATE_API=true` in `.env`. The `--public` ingestion flag declares that the corpus is public; it does not anonymize anything. LangChain tracing is disabled by the CLI.
 
-`data/`, `index/`, `reports/`, and `.env` are gitignored. Indexes contain source text, and evaluation reports may contain questions, references, excerpts, and answers: keep them private too. Gitignore does not remove files already tracked by Git. Do not paste proprietary passages, private evaluation output, or credentials into commits, the README, or issues. Source metadata uses paths relative to the input folder.
+`data/`, `index/`, `reports/`, and `.env` are gitignored. Indexes and evaluation reports contain source content and should be stored alongside the private corpus. Source metadata uses paths relative to the input folder.
 
 ## Evaluate
 
@@ -132,31 +132,7 @@ Each run prints a pandas table and writes `scores.csv`, `details.json`, and `sum
 
 Summary means report their own `n` because metrics have different denominators; inspect the case table and error count alongside every mean. `--retrieval-only` does not generate or verify answers and cannot measure faithfulness. `--no-judge` still runs the answerer and verifier but omits the separate evaluation judge. The judge defaults to the answering model, so its errors may be correlated with the answerer's. This small synthetic suite is a reproducible smoke evaluation, not evidence of performance on real SOPs.
 
-Local validation: 25 unit tests pass, sample ingestion and clustering run with real sentence-transformer embeddings, and `fieldguide eval --retrieval-only --k 2` retrieves the expected source filenames for all 11 answerable cases (mean source recall 1.000). The sample has only four chunks, so this is a basic retrieval check. Live Gemini generation, verification, and judge scores have not yet been measured; they require a configured API key.
-
 For a private evaluation, author cases with the same JSON schema under `data/` and use `--cases data/questions.json --index index/private --output reports/private`. Live private evaluation requires the same API opt-in. Keep references scoped to the correct organization and SOP revision, and include unanswerable questions.
-
-## Technologies used
-
-| Technology or feature | Status | Role |
-| --- | --- | --- |
-| RAG | Implemented | Retrieval followed by grounded generation with citations |
-| Multi-agent answerer + verifier | Implemented | Separate LangChain prompts, deterministic evidence checks, retry and abstention |
-| HuggingFace | Implemented | Local `sentence-transformers/all-MiniLM-L6-v2` embeddings |
-| LangChain | Implemented | Documents, text splitting, embedding adapter, and model chains |
-| Gemini | Implemented | Answerer, verifier, and optional evaluation judge |
-| FAISS | Implemented | Local normalized-vector similarity search |
-| Evaluation harness | Implemented | 14 fixed public cases and per-case metrics |
-| pandas | Implemented | Evaluation tables, CSV reports, and corpus overview |
-| scikit-learn | Implemented, optional extra | K-means clustering of chunk embeddings |
-| PyTorch | Implemented | Local sentence-transformer inference |
-| DSPy | Not implemented | Prompts are written explicitly |
-| Text2SQL | Not implemented | No SQL generation or structured metadata query path |
-| Databricks | Not implemented | Ingestion runs in ordinary Python |
-| Apache Spark / PySpark | Not implemented | No distributed ingestion |
-| AWS / Azure deployment | Not implemented | Local CLI only |
-
-There is no web UI, hosted endpoint, authentication, streaming, or fine-tuning. Deployment to the research team remains a separate step after checking real SOP coverage and permitted API use.
 
 ## Repository and checks
 
