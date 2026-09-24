@@ -74,6 +74,16 @@ fieldguide overview --index index/sample --clusters 3
 
 `python -m fieldguide` also works in place of `fieldguide`. Use `--json` with `ask` or `search` for machine-readable results. `--k` sets the number of retrieved chunks, and `--source` restricts retrieval to filenames containing the supplied text.
 
+For repeated questions, keep the embeddings and index in memory with an interactive session:
+
+```bash
+fieldguide chat --index index/private --source vegetation --allow-private-api --offline
+```
+
+Enter a complete question to get a verified answer, `/search <question>` for local retrieval without Gemini, or `/exit` to quit. Each question is independent; the session does not send conversation history. API failures leave the session open so local search remains available. Gemini questions still use API quota.
+
+`--offline` skips Hugging Face network checks and loads cached model files; use it after the first successful model download. It only affects embedding downloads, not Gemini calls. A new CLI process still loads weights into memory once; `chat` reuses them for the session. See [Hugging Face offline mode](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables#hfhuboffline).
+
 Example answer format using the fictional vegetation document:
 
 ```text

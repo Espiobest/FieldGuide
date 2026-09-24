@@ -14,9 +14,11 @@ DEFAULT_EMBEDDING = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 def embeddings(model: str = DEFAULT_EMBEDDING):
-    from langchain_huggingface import HuggingFaceEmbeddings
-
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from transformers.utils.logging import disable_progress_bar
+
+    disable_progress_bar()
     return HuggingFaceEmbeddings(
         model_name=model,
         model_kwargs={"device": "cpu", "trust_remote_code": False},

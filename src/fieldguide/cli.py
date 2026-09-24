@@ -22,14 +22,16 @@ def parser() -> argparse.ArgumentParser:
     for name, help_text in (
         ("search", "Retrieve chunks locally without an API"),
         ("ask", "Return a verified answer with citations"),
+        ("chat", "Keep the model loaded for repeated questions and local searches"),
     ):
         command = commands.add_parser(name, help=help_text)
-        command.add_argument("question")
+        if name != "chat":
+            command.add_argument("question")
         command.add_argument("--index", type=Path, default=Path("index/sample"))
         command.add_argument("--k", type=int, default=5)
         command.add_argument("--source", help="Filter by source filename substring")
         command.add_argument("--json", action="store_true")
-        if name == "ask":
+        if name in {"ask", "chat"}:
             command.add_argument("--model")
             command.add_argument("--allow-private-api", action="store_true")
             command.add_argument("--show-context", action="store_true")
@@ -46,6 +48,12 @@ def parser() -> argparse.ArgumentParser:
     overview = commands.add_parser("overview", help="Cluster chunks into local topic groups")
     overview.add_argument("--index", type=Path, default=Path("index/sample"))
     overview.add_argument("--clusters", type=int, default=4)
+    for command in commands.choices.values():
+        command.add_argument(
+            "--offline",
+            action="store_true",
+            help="Load cached embeddings without contacting Hugging Face",
+        )
     return root
 
 
@@ -61,6 +69,9 @@ def print_sources(sources: list[dict], show_context: bool = False):
 
 
 def run(args) -> int:
+    if args.offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     from fieldguide.store import LocalIndex
 
     if args.command == "ingest":
@@ -91,6 +102,8 @@ def run(args) -> int:
         manifest = json.loads((args.index / "manifest.json").read_text(encoding="utf-8"))
         require_api_permission(manifest, args.allow_private_api)
     index = LocalIndex.load(args.index, embed=args.command != "overview")
+    if args.command == "chat":
+        return chat(index, args)
     if args.command == "overview":
         from fieldguide.overview import corpus_overview
 
@@ -136,6 +149,10 @@ def run(args) -> int:
     from fieldguide.agents import GroundedQA, make_chains
 
     result = GroundedQA(*make_chains(args.model)).answer(args.question, sources)
+    return print_answer(result, args)
+
+
+def print_answer(result, args) -> int:
     if args.json:
         print(result.model_dump_json(indent=2))
     else:
@@ -155,6 +172,46 @@ def run(args) -> int:
         else:
             print_sources(result.sources, show_context=args.show_context)
     return 0 if result.status == "verified" else 2
+
+
+def chat(index, args) -> int:
+    from fieldguide.agents import GroundedQA, make_chains, require_api_permission
+
+    qa = None
+    print("Ready. Ask a complete question, /search <question> for local retrieval, or /exit.")
+    print("Questions are independent; previous answers are not sent as conversation history.")
+    while True:
+        try:
+            question = input("fieldguide> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if question.lower() in {"/exit", "/quit"}:
+            return 0
+        if not question:
+            continue
+        if question == "/search":
+            print("Usage: /search <question>")
+            continue
+        local = question.startswith("/search ")
+        try:
+            if not local:
+                require_api_permission(index.manifest, args.allow_private_api)
+                if qa is None:
+                    qa = GroundedQA(*make_chains(args.model))
+            query = question[len("/search ") :].strip() if local else question
+            sources = index.search(query, k=args.k, source=args.source)
+            if local:
+                print_sources(sources, show_context=True)
+            else:
+                print_answer(qa.answer(query, sources), args)
+        except KeyboardInterrupt:
+            print("Question interrupted. The index is still loaded.")
+        except Exception as exc:
+            print(
+                f"Question failed ({type(exc).__name__}). Check API quota, credentials, "
+                "and private API permission. /search still works without Gemini."
+            )
 
 
 def main():
