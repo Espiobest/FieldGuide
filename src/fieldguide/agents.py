@@ -104,8 +104,14 @@ def make_chains(model: str | None = None):
         ]
     )
     return (
-        answer_prompt | answerer.with_structured_output(Draft, method="json_schema"),
-        verify_prompt | verifier.with_structured_output(Verdict, method="json_schema"),
+        answer_prompt
+        | answerer.with_structured_output(Draft, method="json_schema").bind(
+            automatic_function_calling={"disable": True}
+        ),
+        verify_prompt
+        | verifier.with_structured_output(Verdict, method="json_schema").bind(
+            automatic_function_calling={"disable": True}
+        ),
     )
 
 

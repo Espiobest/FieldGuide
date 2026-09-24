@@ -57,7 +57,9 @@ def make_judge(model: str | None = None):
             ),
         ]
     )
-    return prompt | llm.with_structured_output(Judgment, method="json_schema")
+    return prompt | llm.with_structured_output(Judgment, method="json_schema").bind(
+        automatic_function_calling={"disable": True}
+    )
 
 
 def token_f1(answer: str, reference: str) -> float:
