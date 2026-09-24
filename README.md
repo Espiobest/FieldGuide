@@ -146,6 +146,8 @@ For a private evaluation, author cases with the same JSON schema under `data/` a
 
 ## Repository and checks
 
+For optional PySpark ingestion in Databricks Free Edition, follow the [sample ingestion walkthrough](docs/databricks.md). It exports document pages, chunks them in a notebook, and imports the result into local FAISS without requiring Gemini calls.
+
 ```text
 src/fieldguide/       Ingestion, retrieval, agents, evaluation, and CLI
 sample_corpus/       Public fictional training documents
