@@ -103,10 +103,11 @@ rank measures how early a relevant result appears. These measure retrieval, not 
 correctness. Missing labels are unscored, and errors are reported separately. The tiny
 public corpus is a smoke test, not a performance estimate for researchers' SOPs.
 
-Use `--retrieval hybrid` with `search`, `ask`, or `chat` to combine semantic matches with
-exact terms. `--retrieval lexical` needs no embedding model. Dense remains the default;
-choose a mode using held-out questions from your own corpus. Scores labeled `cosine`,
-`bm25`, and `rrf` have different scales and are not answer confidence.
+`search`, `ask`, `chat`, and `eval` use hybrid retrieval by default, combining semantic
+matches with exact terms. Use `--retrieval dense` or `--retrieval lexical` to compare modes;
+lexical search does not need an embedding model. Choose settings with held-out questions
+from your corpus. Scores labeled `cosine`, `bm25`, and `rrf` have different scales and are
+not answer confidence.
 
 ```powershell
 fieldguide ingest data --index index/private-sentence --chunking sentence --chunk-size 850 --offline
@@ -121,17 +122,17 @@ index can join the public comparison, but cannot measure retrieval over private 
 The supplied Spark notebook uses fixed character cuts; it does not use the local sentence
 strategy. Existing indexes only change when rebuilt.
 
-For local SOP questions, build a fresh index and optionally use a local cross-encoder reranker:
+For local SOP questions, use hybrid retrieval without reranking as the starting point:
 
 ```powershell
 fieldguide ingest data --index index/private-local --offline
 fieldguide audit --index index/private-local --tokens --offline
-fieldguide search "According to the vegetation SOP, what should be recorded?" --index index/private-local --retrieval hybrid --rerank
-fieldguide ask "According to the vegetation SOP, what should be recorded?" --provider ollama --index index/private-local --retrieval hybrid --rerank --show-context --explain --offline
+fieldguide search "According to the vegetation SOP, what should be recorded?" --index index/private-local --offline
+fieldguide ask "According to the vegetation SOP, what should be recorded?" --provider ollama --index index/private-local --show-context --explain --offline
 ```
 
-The first `--rerank` run downloads `cross-encoder/ms-marco-MiniLM-L-6-v2`; subsequent runs
-can use `--offline`. Reranking runs on CPU and does not call an API. It scores up to
+The optional `--rerank` flag downloads `cross-encoder/ms-marco-MiniLM-L-6-v2` on first use.
+On later runs, pass `--offline`. Reranking runs on CPU and does not call an API. It scores up to
 `max(20, 4*k)` candidate passages and returns the best `k`; scores are relevance scores,
 not probabilities. Short overlapping sentence windows are scored within each chunk, and its
 best window score determines its rank; the original chunk remains available as evidence.

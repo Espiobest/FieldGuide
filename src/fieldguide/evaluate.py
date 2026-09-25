@@ -67,7 +67,7 @@ def run_evaluation(
     qa=None,
     judge=None,
     k: int = 5,
-    retrieval: str = "dense",
+    retrieval: str = "hybrid",
     rerank_model=None,
 ):
     cases = [

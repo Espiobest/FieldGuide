@@ -41,7 +41,9 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--index", type=Path, default=Path("index/sample"))
         command.add_argument("--k", type=int, default=5)
         command.add_argument("--source", help="Filter by source filename substring")
-        command.add_argument("--retrieval", choices=["dense", "lexical", "hybrid"], default="dense")
+        command.add_argument(
+            "--retrieval", choices=["dense", "lexical", "hybrid"], default="hybrid"
+        )
         command.add_argument("--rerank", action="store_true", help="Rerank candidates locally")
         command.add_argument("--json", action="store_true")
         if name in {"ask", "chat"}:
@@ -63,7 +65,9 @@ def parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--provider", choices=["gemini", "ollama"], default="gemini")
     evaluate.add_argument("--judge-model")
     evaluate.add_argument("--k", type=int, default=5)
-    evaluate.add_argument("--retrieval", choices=["dense", "lexical", "hybrid"], default="dense")
+    evaluate.add_argument(
+        "--retrieval", choices=["dense", "lexical", "hybrid"], default="hybrid"
+    )
     evaluate.add_argument("--rerank", action="store_true")
     compare = commands.add_parser("compare-retrieval", help="Compare local indexes without an LLM")
     compare.add_argument("--indexes", nargs="+", type=Path, required=True)

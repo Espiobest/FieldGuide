@@ -5,7 +5,11 @@ from fieldguide.evaluate import run_evaluation, summary, token_f1
 
 
 class Index:
-    def search(self, question, k):
+    def __init__(self):
+        self.mode = None
+
+    def search(self, question, k, *, mode="dense"):
+        self.mode = mode
         return [{"source": "demo.md"}]
 
 
@@ -17,7 +21,9 @@ def test_retrieval_eval_does_not_claim_generation_scores(tmp_path):
         ),
         encoding="utf-8",
     )
-    frame, _ = run_evaluation(Index(), cases)
+    index = Index()
+    frame, _ = run_evaluation(index, cases)
+    assert index.mode == "hybrid"
     assert frame.iloc[0].source_recall == 1.0
     assert "faithfulness" not in frame and "correctness" not in frame
     assert "retrieval_only" in summary(frame)
@@ -81,7 +87,7 @@ def test_generation_errors_count_as_failures(tmp_path):
 
 def test_quote_validity_checks_evidence_instead_of_status(tmp_path):
     class Corpus:
-        def search(self, question, k):
+        def search(self, question, k, *, mode="dense"):
             return [{"id": "S1", "source": "demo.md", "text": "Record units in cm."}]
 
     class QA:
