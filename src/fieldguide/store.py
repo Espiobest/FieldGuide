@@ -1,9 +1,13 @@
-"""Local cosine retrieval using normalized embeddings and a FAISS index."""
+"""Local dense, BM25, and reciprocal-rank-fused document retrieval."""
 
 import hashlib
 import json
+import math
 import os
+import re
 import uuid
+from collections import Counter
+from functools import cached_property
 from pathlib import Path
 
 import faiss
@@ -74,6 +78,9 @@ class LocalIndex:
             "vectors_sha256": hashlib.sha256((folder / vector_name).read_bytes()).hexdigest(),
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
+            "chunk_methods": sorted({
+                doc.metadata.get("chunk_method", "legacy-recursive") for doc in documents
+            }),
         }
         temporary = folder / f"{generation}.manifest.tmp"
         temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -105,32 +112,93 @@ class LocalIndex:
             index, documents, manifest, embeddings(manifest["embedding_model"]) if embed else None
         )
 
-    def search(self, question: str, k: int = 5, source: str | None = None):
+    @cached_property
+    def _lexical_corpus(self):
+        terms = [Counter(self._tokens(doc.page_content)) for doc in self.documents]
+        frequencies = Counter(term for counts in terms for term in counts)
+        lengths = [sum(counts.values()) for counts in terms]
+        average = sum(lengths) / max(len(lengths), 1)
+        return terms, frequencies, lengths, average
+
+    @staticmethod
+    def _tokens(text):
+        return re.findall(r"[^\W_]+", text.casefold())
+
+    def _lexical_scores(self, question, eligible):
+        terms, frequencies, lengths, average = self._lexical_corpus
+        query = set(self._tokens(question))
+        count = len(terms)
+        scores = {}
+        for position in eligible:
+            score = 0.0
+            for term in query:
+                frequency = terms[position][term]
+                if not frequency:
+                    continue
+                inverse = math.log(1 + (count - frequencies[term] + 0.5)
+                                   / (frequencies[term] + 0.5))
+                normalization = 1.5 * (0.25 + 0.75 * lengths[position] / (average or 1))
+                score += inverse * frequency * 2.5 / (frequency + normalization)
+            if score > 0:
+                scores[position] = score
+        return scores
+
+    def search(
+        self, question: str, k: int = 5, source: str | None = None, *, mode: str = "dense"
+    ):
         if not question.strip() or k < 1:
             raise ValueError("Provide a nonempty question and a positive retrieval count.")
-        if self.embedder is None:
+        if mode not in {"dense", "lexical", "hybrid"}:
+            raise ValueError("Retrieval mode must be dense, lexical, or hybrid.")
+        if mode != "lexical" and self.embedder is None:
             raise ValueError("Load the index with embeddings enabled before searching.")
-        if self.index.ntotal == 0:
+        eligible = {
+            i for i, doc in enumerate(self.documents)
+            if not source or source.casefold() in doc.metadata["source"].casefold()
+        }
+        if not eligible:
             return []
-        vector = np.asarray([self.embedder.embed_query(question)], dtype="float32")
-        faiss.normalize_L2(vector)
-        count = self.index.ntotal if source else min(k, self.index.ntotal)
-        scores, positions = self.index.search(vector, count)
+        dense = {}
+        lexical = {}
+        if mode != "lexical":
+            vector = np.asarray([self.embedder.embed_query(question)], dtype="float32")
+            faiss.normalize_L2(vector)
+            scores, positions = self.index.search(vector, self.index.ntotal)
+            dense = {
+                int(position): float(score)
+                for score, position in zip(scores[0], positions[0], strict=True)
+                if position in eligible
+            }
+        if mode != "dense":
+            lexical = self._lexical_scores(question, eligible)
+        dense_order = sorted(dense, key=lambda i: (-dense[i], i))
+        lexical_order = sorted(lexical, key=lambda i: (-lexical[i], i))
+        pool_size = max(20, k * 4)
+        dense_rank = {position: rank for rank, position in
+                      enumerate(dense_order[:pool_size], 1)}
+        lexical_rank = {position: rank for rank, position in
+                        enumerate(lexical_order[:pool_size], 1)}
+        if mode == "hybrid":
+            ranking_scores = {
+                position: sum(1 / (60 + ranks[position])
+                              for ranks in (dense_rank, lexical_rank) if position in ranks)
+                for position in dense_rank.keys() | lexical_rank.keys()
+            }
+        else:
+            ranking_scores = dense if mode == "dense" else lexical
+        order = sorted(ranking_scores, key=lambda i: (-ranking_scores[i], i))[:k]
         results = []
-        for score, position in zip(scores[0], positions[0], strict=True):
-            if position < 0:
-                continue
+        for position in order:
             doc = self.documents[position]
-            if source and source.casefold() not in doc.metadata["source"].casefold():
-                continue
-            results.append(
-                {
-                    "id": f"S{len(results) + 1}",
-                    "text": doc.page_content,
-                    **doc.metadata,
-                    "score": float(score),
-                }
-            )
-            if len(results) == k:
-                break
+            results.append({
+                **doc.metadata,
+                "id": f"S{len(results) + 1}",
+                "text": doc.page_content,
+                "score": ranking_scores[position],
+                "score_kind": {"dense": "cosine", "lexical": "bm25", "hybrid": "rrf"}[mode],
+                "dense_score": dense.get(position),
+                "lexical_score": lexical.get(position),
+                "dense_rank": dense_rank.get(position),
+                "lexical_rank": lexical_rank.get(position),
+            })
         return results

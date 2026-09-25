@@ -74,6 +74,48 @@ fieldguide overview --index index/sample --clusters 3
 
 `python -m fieldguide` also works in place of `fieldguide`. Use `--json` with `ask` or `search` for machine-readable results. `--k` sets the number of retrieved chunks, and `--source` restricts retrieval to filenames containing the supplied text.
 
+### Compare chunking and retrieval
+
+Ingestion uses sentence boundaries by default, with whole-sentence overlap where it fits.
+Consecutive PDF pages can share a chunk; citations retain the start and end pages.
+`--chunk-size` and `--overlap` are character limits, not token counts. Long sentences still
+require a bounded fallback split. PDF tables, headers, and multi-column layouts may need
+extraction cleanup; sentence splitting does not repair their reading order.
+
+Keep separate indexes to compare against the earlier recursive splitter:
+
+```powershell
+fieldguide ingest sample_corpus --index index/sample-recursive --public --chunking recursive --chunk-size 850 --offline
+fieldguide ingest sample_corpus --index index/sample-sentence --public --chunking sentence --chunk-size 850 --offline
+fieldguide compare-retrieval --indexes index/sample-recursive index/sample-sentence --k 3 --offline
+```
+
+The comparison runs dense similarity, lexical BM25, and hybrid reciprocal rank fusion on
+the same questions without an LLM. It writes per-case scores and retrieved passages under
+`reports/retrieval/`. Source recall measures whether the right documents appear. Evidence
+recall measures whether the labeled excerpts appear in the retrieved chunks; reciprocal
+rank measures how early a relevant result appears. These measure retrieval, not answer
+correctness. Missing labels are unscored, and errors are reported separately. The tiny
+public corpus is a smoke test, not a performance estimate for researchers' SOPs.
+
+Use `--retrieval hybrid` with `search`, `ask`, or `chat` to combine semantic matches with
+exact terms. `--retrieval lexical` needs no embedding model. Dense remains the default;
+choose a mode using held-out questions from your own corpus. Scores labeled `cosine`,
+`bm25`, and `rrf` have different scales and are not answer confidence.
+
+```powershell
+fieldguide ingest data --index index/private-sentence --chunking sentence --chunk-size 850 --offline
+fieldguide search "What must be recorded at each vegetation plot?" --index index/private-sentence --retrieval hybrid --k 3 --offline
+```
+
+For a private benchmark, put cases in `data/retrieval_questions.json`, following
+`eval/retrieval_questions.json`: each gold evidence entry needs a source path and an exact
+excerpt from that source. Compare indexes built from the same document versions with
+`--cases data/retrieval_questions.json`. Keep cases and reports private. A Databricks sample
+index can join the public comparison, but cannot measure retrieval over private SOPs.
+The supplied Spark notebook uses fixed character cuts; it does not use the local sentence
+strategy. Existing indexes only change when rebuilt.
+
 For repeated questions, keep the embeddings and index in memory with an interactive session:
 
 ```bash

@@ -18,6 +18,7 @@ def parser() -> argparse.ArgumentParser:
     ingest.add_argument("--public", action="store_true", help="Declare this corpus public")
     ingest.add_argument("--chunk-size", type=int, default=1000)
     ingest.add_argument("--overlap", type=int, default=150)
+    ingest.add_argument("--chunking", choices=["sentence", "recursive"], default="sentence")
     ingest.add_argument("--embedding-model", default="sentence-transformers/all-MiniLM-L6-v2")
     export = commands.add_parser("export-pages", help="Export document pages for Spark ingestion")
     export.add_argument("folder", type=Path)
@@ -38,6 +39,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--index", type=Path, default=Path("index/sample"))
         command.add_argument("--k", type=int, default=5)
         command.add_argument("--source", help="Filter by source filename substring")
+        command.add_argument("--retrieval", choices=["dense", "lexical", "hybrid"], default="dense")
         command.add_argument("--json", action="store_true")
         if name in {"ask", "chat"}:
             command.add_argument("--model")
@@ -55,6 +57,11 @@ def parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--provider", choices=["gemini", "ollama"], default="gemini")
     evaluate.add_argument("--judge-model")
     evaluate.add_argument("--k", type=int, default=5)
+    compare = commands.add_parser("compare-retrieval", help="Compare local indexes without an LLM")
+    compare.add_argument("--indexes", nargs="+", type=Path, required=True)
+    compare.add_argument("--cases", type=Path, default=Path("eval/retrieval_questions.json"))
+    compare.add_argument("--k", type=int, default=3)
+    compare.add_argument("--output", type=Path, default=Path("reports/retrieval"))
     overview = commands.add_parser("overview", help="Cluster chunks into local topic groups")
     overview.add_argument("--index", type=Path, default=Path("index/sample"))
     overview.add_argument("--clusters", type=int, default=4)
@@ -70,9 +77,11 @@ def parser() -> argparse.ArgumentParser:
 def print_sources(sources: list[dict], show_context: bool = False):
     for source in sources:
         page = f", page {source['page']}" if source.get("page") else ""
+        if source.get("page_end") and source["page_end"] != source.get("page"):
+            page += f"–{source['page_end']}"
         print(
             f"[{source['id']}] {source['source']}{page} | chunk {source['chunk_id']} "
-            f"| similarity {source['score']:.3f}"
+            f"| {source.get('score_kind', 'similarity')} {source['score']:.3f}"
         )
         if show_context:
             print(source["text"] + "\n")
@@ -83,6 +92,39 @@ def run(args) -> int:
         os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     from fieldguide.store import LocalIndex
+
+    if args.command == "compare-retrieval":
+        from fieldguide.compare import compare_retrieval, summarize_comparison
+        from fieldguide.store import embeddings
+
+        if len(set(args.indexes)) != len(args.indexes):
+            raise ValueError("Provide distinct index paths.")
+        indexes = {str(path): LocalIndex.load(path, embed=False) for path in args.indexes}
+        embedders = {}
+        for index in indexes.values():
+            model = index.manifest["embedding_model"]
+            if model not in embedders:
+                embedders[model] = embeddings(model)
+            index.embedder = embedders[model]
+        frame, details = compare_retrieval(indexes, args.cases, k=args.k)
+        args.output.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(args.output / "scores.csv", index=False)
+        (args.output / "details.json").write_text(
+            json.dumps(
+                {
+                    "k": args.k,
+                    "indexes": {name: index.manifest for name, index in indexes.items()},
+                    "results": details,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        report = summarize_comparison(frame)
+        print(report)
+        (args.output / "summary.txt").write_text(report, encoding="utf-8")
+        return int((frame.status == "error").any())
 
     if args.command == "export-pages":
         from fieldguide.chunk_io import export_pages
@@ -110,7 +152,7 @@ def run(args) -> int:
         from fieldguide.ingest import chunk_documents, read_documents
 
         documents, warnings = read_documents(args.folder)
-        chunks = chunk_documents(documents, args.chunk_size, args.overlap)
+        chunks = chunk_documents(documents, args.chunk_size, args.overlap, strategy=args.chunking)
         LocalIndex.build(
             chunks,
             args.index,
@@ -134,7 +176,8 @@ def run(args) -> int:
         manifest = json.loads((args.index / "manifest.json").read_text(encoding="utf-8"))
         if args.provider == "gemini":
             require_api_permission(manifest, args.allow_private_api)
-    index = LocalIndex.load(args.index, embed=args.command != "overview")
+    need_embeddings = args.command != "overview" and getattr(args, "retrieval", None) != "lexical"
+    index = LocalIndex.load(args.index, embed=need_embeddings)
     if args.command == "chat":
         return chat(index, args)
     if args.command == "overview":
@@ -180,7 +223,7 @@ def run(args) -> int:
         print(report)
         (args.output / "summary.txt").write_text(report, encoding="utf-8")
         return 1 if (frame.status == "error").any() else 0
-    sources = index.search(args.question, k=args.k, source=args.source)
+    sources = index.search(args.question, k=args.k, source=args.source, mode=args.retrieval)
     if args.command == "search":
         if args.json:
             print(json.dumps(sources, indent=2, ensure_ascii=False))
@@ -244,7 +287,7 @@ def chat(index, args) -> int:
                 if qa is None:
                     qa = GroundedQA(*make_chains(args.model, provider=args.provider))
             query = question[len("/search ") :].strip() if local else question
-            sources = index.search(query, k=args.k, source=args.source)
+            sources = index.search(query, k=args.k, source=args.source, mode=args.retrieval)
             if local:
                 print_sources(sources, show_context=True)
             else:

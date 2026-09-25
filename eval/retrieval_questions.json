@@ -1,0 +1,173 @@
+[
+  {
+    "id": "V01",
+    "question": "In Demo Marsh Lab's exercise, how big is the quadrat?",
+    "reference": "Use a 1 m by 1 m quadrat at each marked training plot.",
+    "expected_sources": [
+      "vegetation_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "For this fictional exercise, place a 1 m by 1 m quadrat at each marked training plot."
+      }
+    ]
+  },
+  {
+    "id": "V02",
+    "question": "Can the summed species cover exceed 100 percent in the vegetation exercise? Why?",
+    "reference": "Yes. Estimate each species separately; overlapping plant layers mean summed species cover may exceed 100 percent.",
+    "expected_sources": [
+      "vegetation_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "Estimate the percent cover of each species separately. Overlapping plant layers mean that the summed species cover may exceed 100 percent."
+      }
+    ]
+  },
+  {
+    "id": "V03",
+    "question": "What should a trainee do if they cannot identify a plant?",
+    "reference": "Assign a temporary code, photograph it, and ask the field lead to review before replacing the code. Do not guess a species name or collect a specimen.",
+    "expected_sources": [
+      "vegetation_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "If a plant cannot be identified, assign a temporary code and photograph it. Ask the field lead to review the identification before replacing the temporary code."
+      },
+      {
+        "source": "vegetation_training.md",
+        "text": "Do not guess a species name or collect a specimen for this exercise."
+      }
+    ]
+  },
+  {
+    "id": "V04",
+    "question": "What is the difference between NA and zero cover in Demo Marsh Lab's notes?",
+    "reference": "NA marks an unmeasured value and needs a reason in the notes. Zero cover means the species was assessed and absent.",
+    "expected_sources": [
+      "vegetation_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "Mark an unmeasured value as NA and add a reason in the notes."
+      },
+      {
+        "source": "vegetation_training.md",
+        "text": "Zero cover means the species was assessed and was absent."
+      }
+    ]
+  },
+  {
+    "id": "V05",
+    "question": "Who reviews the vegetation notebook and when?",
+    "reference": "The trainee and field lead review the notebook together on the same day.",
+    "expected_sources": [
+      "vegetation_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "The trainee and field lead review the notebook together on the same day."
+      }
+    ]
+  },
+  {
+    "id": "V06",
+    "question": "What equipment should be packed for the vegetation training exercise?",
+    "reference": "Pack a quadrat frame, field notebook, pencil, and camera.",
+    "expected_sources": [
+      "vegetation_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "Pack a quadrat frame, a field notebook, a pencil, and a camera for the training exercise."
+      }
+    ]
+  },
+  {
+    "id": "W01",
+    "question": "What units and datum are used for the water-level reading?",
+    "reference": "Record the water level in centimeters relative to the marked training datum.",
+    "expected_sources": [
+      "water_level_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "water_level_training.md",
+        "text": "Read the training staff gauge and record the water level in centimeters relative to the marked training datum."
+      }
+    ]
+  },
+  {
+    "id": "W02",
+    "question": "What should happen if the staff gauge is damaged or unreadable?",
+    "reference": "Record NA and describe the problem, notify the field lead before leaving, and do not substitute an estimated water level.",
+    "expected_sources": [
+      "water_level_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "water_level_training.md",
+        "text": "If the staff gauge is damaged or unreadable, record NA and describe the problem."
+      },
+      {
+        "source": "water_level_training.md",
+        "text": "Notify the field lead before leaving the station. Do not substitute an estimated water level for an unreadable gauge."
+      }
+    ]
+  },
+  {
+    "id": "W03",
+    "question": "What should the lead check before entering the water-level training area?",
+    "reference": "Check the tide forecast and planned exit route.",
+    "expected_sources": [
+      "water_level_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "water_level_training.md",
+        "text": "Before entering the training area, the field lead checks the tide forecast and the planned exit route."
+      }
+    ]
+  },
+  {
+    "id": "W04",
+    "question": "How should a water-level transcription error be corrected?",
+    "reference": "Preserve the original recorded value and record the correction and reason separately.",
+    "expected_sources": [
+      "water_level_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "water_level_training.md",
+        "text": "Preserve the original recorded value when correcting a transcription error; record the correction and the reason separately."
+      }
+    ]
+  },
+  {
+    "id": "X01",
+    "question": "How do both fictional organizations handle missing measurements?",
+    "reference": "Demo Marsh Lab records NA with a reason for unmeasured values, not zero. Demo Estuary Group records NA and describes the problem for a damaged or unreadable gauge, without estimating a water level.",
+    "expected_sources": [
+      "vegetation_training.md",
+      "water_level_training.md"
+    ],
+    "expected_evidence": [
+      {
+        "source": "vegetation_training.md",
+        "text": "Mark an unmeasured value as NA and add a reason in the notes."
+      },
+      {
+        "source": "water_level_training.md",
+        "text": "If the staff gauge is damaged or unreadable, record NA and describe the problem."
+      }
+    ]
+  }
+]
