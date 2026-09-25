@@ -243,11 +243,24 @@ class LocalIndex:
         if should_route and len(results) >= 3:
             votes = Counter(item["source"] for item in results[:3])
             selected = next(item["source"] for item in results[:3] if votes[item["source"]] >= 2)
-            results = [item for item in results if item["source"] == selected]
+            source_scores = {}
             for item in results:
-                item["routed_source"] = selected
-                item["routing_method"] = "top_three_source_vote"
-                item["routing_votes"] = votes[selected]
+                source_scores[item["source"]] = max(
+                    item["score"], source_scores.get(item["source"], float("-inf"))
+                )
+            competing_scores = [score for source_name, score in source_scores.items()
+                                if source_name != selected]
+            margin = (
+                source_scores[selected] / max(competing_scores)
+                if competing_scores and max(competing_scores) > 0
+                else float("inf")
+            )
+            if source_scores[selected] == max(source_scores.values()) and margin >= 1.10:
+                results = [item for item in results if item["source"] == selected]
+                for item in results:
+                    item["routed_source"] = selected
+                    item["routing_method"] = "top_three_source_vote"
+                    item["routing_votes"] = votes[selected]
         if rerank_model and results:
             from fieldguide.rerank import get_reranker
 

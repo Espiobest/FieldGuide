@@ -10,7 +10,9 @@ from fieldguide.agents import (
     Evidence,
     GroundedQA,
     Verdict,
+    enforce_rationale_evidence,
     evidence_errors,
+    rationale_errors,
     require_api_permission,
     verdict_passes,
 )
@@ -265,3 +267,103 @@ def test_duplicate_checks_do_not_trigger_reduced_answer():
     result = GroundedQA(FakeChain(proposal), verifier, max_attempts=1).answer("What size?", SOURCES)
     assert result.status == "abstained"
     assert len(verifier.calls) == 1
+
+
+def test_why_answer_needs_explicit_rationale_in_its_citation():
+    proposal = Draft(
+        answerable=True,
+        claims=[
+            Claim(
+                text="Photos record general marsh conditions and provide insight into change.",
+                evidence=[
+                    Evidence(
+                        source_id="S1",
+                        quote=(
+                            "Photographs record general marsh condition "
+                            "and can lend insights to changes."
+                        ),
+                    )
+                ],
+            ),
+            Claim(
+                text="The photos document transect direction for future reference.",
+                evidence=[
+                    Evidence(
+                        source_id="S1",
+                        quote=(
+                            "The transect is photographed with the date and direction "
+                            "on a whiteboard."
+                        ),
+                    )
+                ],
+            ),
+        ],
+    )
+    approved = Verdict(
+        answers_question=True,
+        checks=[
+            ClaimCheck(claim_index=i, supported=True, reason="The quote is present.")
+            for i in range(2)
+        ],
+        feedback="Both quotes are present.",
+    )
+    assert rationale_errors("Why take transect photographs?", proposal) == [1]
+    checked = enforce_rationale_evidence("Why take transect photographs?", proposal, approved)
+    assert checked.checks[0].supported
+    assert not checked.checks[1].supported
+    assert rationale_errors("What details are on the whiteboard?", proposal) == []
+
+
+def test_supported_part_of_why_answer_survives_unsupported_extra_claim():
+    source = {
+        **SOURCES[0],
+        "text": (
+            "Photographs record general marsh condition and can lend insights to changes. "
+            "The transect is photographed with the date and direction on a whiteboard."
+        ),
+    }
+    proposal = Draft(
+        answerable=True,
+        claims=[
+            Claim(
+                text="Photos record marsh condition and provide insight into change.",
+                evidence=[
+                    Evidence(
+                        source_id="S1",
+                        quote=(
+                            "Photographs record general marsh condition "
+                            "and can lend insights to changes."
+                        ),
+                    )
+                ],
+            ),
+            Claim(
+                text="The photos document transect direction for future reference.",
+                evidence=[
+                    Evidence(
+                        source_id="S1",
+                        quote=(
+                            "The transect is photographed with the date and direction "
+                            "on a whiteboard."
+                        ),
+                    )
+                ],
+            ),
+        ],
+    )
+    mixed = Verdict(
+        answers_question=True,
+        checks=[
+            ClaimCheck(claim_index=i, supported=True, reason="The quote is present.")
+            for i in range(2)
+        ],
+        feedback="Both claims are supported.",
+    )
+    verifier = FakeChain(mixed, verdict())
+    result = GroundedQA(FakeChain(proposal), verifier, max_attempts=1).answer(
+        "Why take transect photographs?", [source]
+    )
+    assert result.status == "verified"
+    assert result.text == "Photos record marsh condition and provide insight into change. [S1]"
+    assert len(verifier.calls) == 2
+    assert result.diagnostics[0]["verdict"]["checks"][1]["supported"] is False

@@ -97,6 +97,18 @@ application computes the final approval from these checks.
 Do not rewrite the answer. Give specific feedback for rejected claims.
 """
 
+RATIONALE_PATTERNS = (
+    r"\bbecause\b",
+    r"\bso that\b",
+    r"\bin order to\b",
+    r"\b(?:purpose|reason)\b",
+    r"\bto\s+(?:allow|avoid|capture|compare|document|enable|ensure|help|identify|"
+    r"measure|monitor|prevent|provide|record|reduce|show|support|track)\b",
+    r"\b(?:allows?|avoids?|captures?|enables?|ensures?|helps?|prevents?|provides?|"
+    r"records?|reduces?|supports?|tracks?)\b",
+    r"\bcan\s+(?:allow|enable|help|lend|provide|support)\b",
+)
+
 
 def make_chains(model: str | None = None, provider: str = "gemini"):
     from fieldguide.providers import structured_model
@@ -142,6 +154,36 @@ def evidence_errors(draft: Draft, sources: list[dict]) -> list[str]:
             ):
                 errors.append(f"Claim {i}: evidence quote does not match its source.")
     return errors
+
+
+def rationale_errors(question: str, draft: Draft) -> list[int]:
+    """Reject why-claims whose cited text describes an action but gives no rationale."""
+    if not re.search(r"\bwhy\b|\b(?:reason|purpose)\b", question, re.IGNORECASE):
+        return []
+    rejected = []
+    for index, claim in enumerate(draft.claims):
+        evidence = " ".join(item.quote for item in claim.evidence).casefold()
+        if not any(re.search(pattern, evidence) for pattern in RATIONALE_PATTERNS):
+            rejected.append(index)
+    return rejected
+
+
+def enforce_rationale_evidence(question: str, draft: Draft, verdict: Verdict) -> Verdict:
+    rejected = set(rationale_errors(question, draft))
+    if not rejected:
+        return verdict
+    checks = []
+    for check in verdict.checks:
+        if check.claim_index in rejected:
+            check = check.model_copy(
+                update={
+                    "supported": False,
+                    "reason": "Cited text does not explicitly connect the action to a purpose.",
+                }
+            )
+        checks.append(check)
+    feedback = verdict.feedback + " Cited text for a why-claim must state its reason or purpose."
+    return verdict.model_copy(update={"checks": checks, "feedback": feedback})
 
 
 def verdict_passes(verdict: Verdict, count: int) -> bool:
@@ -224,6 +266,7 @@ class GroundedQA:
                         }
                     )
                 )
+            verdict = enforce_rationale_evidence(question, draft, verdict)
             approved = verdict_passes(verdict, len(draft.claims))
             diagnostics.append(
                 {

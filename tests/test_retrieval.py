@@ -73,8 +73,8 @@ def test_unknown_mode_rejected(index):
         index.search("plant", mode="unknown")
 
 
-def routed_index():
-    sources = ["vegetation.pdf"] * 3 + ["water.pdf"] * 2
+def routed_index(vegetation_chunks=17, water_chunks=3):
+    sources = ["vegetation.pdf"] * vegetation_chunks + ["water.pdf"] * water_chunks
     documents = [
         Document(page_content=f"Survey procedure passage {position}.", metadata={"source": source})
         for position, source in enumerate(sources)
@@ -96,6 +96,16 @@ def test_automatic_source_route_uses_top_three_majority():
     assert all(result["routing_votes"] >= 2 for result in results)
 
 
+def test_close_source_scores_keep_corpus_wide_context():
+    results = routed_index(vegetation_chunks=2, water_chunks=3).search(
+        "survey procedure", k=3, mode="hybrid"
+    )
+    assert [result["source"] for result in results] == [
+        "vegetation.pdf", "vegetation.pdf", "water.pdf"
+    ]
+    assert all("routed_source" not in result for result in results)
+
+
 def test_explicit_source_overrides_automatic_source_route():
     results = routed_index().search("survey procedure", k=2, source="water", mode="hybrid")
     assert [result["source"] for result in results] == ["water.pdf"] * 2
@@ -103,12 +113,14 @@ def test_explicit_source_overrides_automatic_source_route():
 
 
 def test_comparison_question_keeps_results_from_multiple_sources():
-    results = routed_index().search("Compare survey procedures", k=5, mode="hybrid")
+    results = routed_index(vegetation_chunks=2, water_chunks=3).search(
+        "Compare survey procedures", k=5, mode="hybrid"
+    )
     assert {result["source"] for result in results} == {"vegetation.pdf", "water.pdf"}
 
 
 def test_automatic_source_route_can_be_disabled():
-    results = routed_index().search(
+    results = routed_index(vegetation_chunks=2, water_chunks=3).search(
         "survey procedure", k=5, mode="hybrid", route_documents=False
     )
     assert {result["source"] for result in results} == {"vegetation.pdf", "water.pdf"}
