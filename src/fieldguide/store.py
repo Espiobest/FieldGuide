@@ -240,9 +240,11 @@ class LocalIndex:
                     "inferred_source": inferred,
                 }
             )
-        if should_route and len(results) >= 3:
-            votes = Counter(item["source"] for item in results[:3])
-            selected = next(item["source"] for item in results[:3] if votes[item["source"]] >= 2)
+        votes = Counter(item["source"] for item in results[:3])
+        selected = next(
+            (item["source"] for item in results[:3] if votes[item["source"]] >= 2), None
+        )
+        if should_route and len(results) >= 3 and selected is not None:
             source_scores = {}
             for item in results:
                 source_scores[item["source"]] = max(

@@ -124,3 +124,19 @@ def test_automatic_source_route_can_be_disabled():
         "survey procedure", k=5, mode="hybrid", route_documents=False
     )
     assert {result["source"] for result in results} == {"vegetation.pdf", "water.pdf"}
+
+
+def test_no_majority_among_top_three_sources_skips_routing():
+    documents = [
+        Document(page_content=f"Survey procedure passage {i}.", metadata={"source": name})
+        for i, name in enumerate(["a.pdf", "b.pdf", "c.pdf", "a.pdf"])
+    ]
+    store = faiss.IndexFlatIP(2)
+    store.add(np.tile(np.array([[1.0, 0.0]], dtype="float32"), (len(documents), 1)))
+    index = LocalIndex(store, documents, {}, Embedder())
+    index._lexical_scores = lambda question, eligible: {
+        position: float(len(documents) - position) for position in eligible
+    }
+    results = index.search("survey procedure", k=4, mode="hybrid")
+    assert [result["source"] for result in results] == ["a.pdf", "b.pdf", "c.pdf", "a.pdf"]
+    assert all("routed_source" not in result for result in results)
