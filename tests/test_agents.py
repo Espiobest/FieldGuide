@@ -2,6 +2,8 @@ import pytest
 
 from fieldguide.agents import (
     ABSTENTION,
+    ANSWER_PROMPT,
+    VERIFIER_PROMPT,
     Claim,
     ClaimCheck,
     Draft,
@@ -23,6 +25,12 @@ SOURCES = [
         "score": 0.8,
     }
 ]
+
+
+def test_prompts_require_explicit_rationale_for_why_questions():
+    assert "reason or purpose that the source explicitly connects" in ANSWER_PROMPT
+    assert "recorded metadata" in ANSWER_PROMPT
+    assert "explicitly gives the action's reason or purpose" in VERIFIER_PROMPT
 
 
 class FakeChain:

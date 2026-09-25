@@ -67,6 +67,10 @@ Use the fewest claims needed to answer the question. You do not need to use ever
 Prefer the passage that directly answers the question; omit unrelated procedures and
 historical examples unless the question asks for them. Explicitly name each document when
 comparing different procedures. Do not apply instructions for one activity to another.
+Answer the question's requested relationship, not merely its topic. For a why question,
+state only a reason or purpose that the source explicitly connects to the action. Do not
+substitute nearby steps, recorded metadata, or general benefits for that reason. If no
+explicit rationale is retrieved, set answerable=false and claims=[].
 If the context does not establish the requested answer, set answerable=false and claims=[].
 Do not infer absence of a rule from its absence in these excerpts.
 Distinguish procedures from historical observations: a report that sampling occurred in
@@ -81,6 +85,8 @@ Check EVERY claim against its cited sources, not general knowledge or uncited so
 Exact quoted text alone does not prove that a claim follows from it. Reject changed numbers,
 units, negation, invented steps, missing conditions, incompatible organization/revision
 scopes, and conclusions based on silence. Check that the answer addresses the question.
+For a why question, require evidence that explicitly gives the action's reason or purpose;
+details recorded during the action do not by themselves explain why the action is done.
 Check the activity as well as the words: bird-survey instructions are not vegetation-survey
 instructions merely because both appear in the same retrieved passage.
 Reject a claim that turns a dated observation into a general instruction. For example,
