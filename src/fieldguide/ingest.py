@@ -7,6 +7,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 
 SUPPORTED = {".pdf", ".docx", ".md", ".txt"}
+EXPLICIT_HEADING = re.compile(r"(?:#{1,6}\s+|\d+(?:\.\d+)+\s+)")
 
 
 def read_documents(folder: Path) -> tuple[list[Document], list[str]]:
@@ -24,6 +25,7 @@ def read_documents(folder: Path) -> tuple[list[Document], list[str]]:
             continue
         try:
             suffix = path.suffix.lower()
+            source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
             if suffix == ".pdf":
                 from pypdf import PdfReader
 
@@ -38,8 +40,11 @@ def read_documents(folder: Path) -> tuple[list[Document], list[str]]:
                     if isinstance(block, Table):
                         blocks.extend(" | ".join(c.text for c in row.cells) for row in block.rows)
                     else:
-                        blocks.append(block.text)
-                pages = ["\n".join(blocks)]
+                        style = block.style.name if block.style else ""
+                        heading = re.fullmatch(r"Heading ([1-6])", style)
+                        prefix = "#" * int(heading[1]) + " " if heading else ""
+                        blocks.append(prefix + block.text)
+                pages = ["\n\n".join(blocks)]
             else:
                 pages = [path.read_text(encoding="utf-8-sig")]
             for page, text in enumerate(pages, 1):
@@ -53,6 +58,7 @@ def read_documents(folder: Path) -> tuple[list[Document], list[str]]:
                         metadata={
                             "source": relative,
                             "page": page if suffix == ".pdf" else None,
+                            "source_sha256": source_sha256,
                         },
                     )
                 )
@@ -65,7 +71,7 @@ def read_documents(folder: Path) -> tuple[list[Document], list[str]]:
 
 def chunk_documents(
     documents: list[Document], size: int = 1000, overlap: int = 150,
-    strategy: str = "sentence",
+    strategy: str = "structure",
 ) -> list[Document]:
     """Use character budgets and whole-sentence overlap, except for oversized sentences."""
     from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -79,9 +85,14 @@ def chunk_documents(
         chunks = splitter.split_documents(documents)
     elif strategy == "sentence":
         chunks = _sentence_chunks(documents, size, overlap)
+    elif strategy == "structure":
+        chunks = _structure_chunks(documents, size, overlap)
     else:
-        raise ValueError("Chunk strategy must be sentence or recursive.")
+        raise ValueError("Chunk strategy must be structure, sentence, or recursive.")
     for chunk in chunks:
+        chunk.metadata.setdefault(
+            "end_index", chunk.metadata["start_index"] + len(chunk.page_content),
+        )
         identity = (
             f"{chunk.metadata['source']}:{chunk.metadata['page']}:"
             f"{chunk.metadata['start_index']}:{chunk.page_content}"
@@ -182,4 +193,91 @@ def _sentence_chunks(documents: list[Document], size: int, overlap: int) -> list
                     break
                 next_cursor = candidate
             cursor = next_cursor
+    return chunks
+
+
+def _structure_layout(text: str) -> str:
+    """Unwrap prose while retaining explicit headings, paragraphs, and list items."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    blocks, prose = [], []
+
+    def flush() -> None:
+        if prose:
+            blocks.append(" ".join(prose))
+            prose.clear()
+
+    for line in lines:
+        line = re.sub(r"[^\S\n]+", " ", line).strip()
+        if not line:
+            flush()
+            if blocks and blocks[-1] != "":
+                blocks.append("")
+        elif EXPLICIT_HEADING.match(line) or "|" in line:
+            flush()
+            blocks.append(line)
+        elif re.match(r"(?:[-*+\u2022]|\d+[.)])\s+", line):
+            flush()
+            prose.append(line)
+        else:
+            prose.append(line)
+    flush()
+    return "\n".join(blocks).strip()
+
+
+def _structure_chunks(documents: list[Document], size: int, overlap: int) -> list[Document]:
+    chunks = []
+    for run in _document_runs(documents):
+        text, locations = "", []
+        for document in run:
+            normalized = _structure_layout(document.page_content)
+            if not normalized:
+                continue
+            if text:
+                # Keep page-leading headings explicit, even across PDF page boundaries.
+                text += "\n" if EXPLICIT_HEADING.match(normalized) else " "
+            start = len(text)
+            text += normalized
+            locations.append((start, len(text), document.metadata.get("page")))
+        headings = list(re.finditer(
+            r"^(?:(#{1,6})[ \t]+(.+?)[ \t]*#*|(\d+(?:\.\d+)+)[ \t]+(.+?))[ \t]*$",
+            text, re.MULTILINE,
+        ))
+        title = next((h[2].strip() for h in headings if h[1] == "#"), None)
+        boundaries = sorted({0, len(text), *(h.start() for h in headings)})
+        heading_at = {h.start(): h for h in headings}
+        hierarchy: dict[int, str] = {}
+        for start, stop in zip(boundaries, boundaries[1:], strict=False):
+            if start in heading_at:
+                heading = heading_at[start]
+                level = len(heading[1]) if heading[1] else heading[3].count(".") + 1
+                hierarchy = {depth: value for depth, value in hierarchy.items() if depth < level}
+                hierarchy[level] = (heading[2] or heading[4]).strip()[:120]
+            units = [(a + start, b + start) for a, b in _units(text[start:stop], size)]
+            cursor = 0
+            while cursor < len(units):
+                end = cursor + 1
+                while end < len(units) and units[end][1] - units[cursor][0] <= size:
+                    end += 1
+                begin, finish = units[cursor][0], units[end - 1][1]
+                pages = [page for a, b, page in locations if a < finish and b > begin]
+                metadata = {
+                    **run[0].metadata, "page": pages[0], "page_end": pages[-1],
+                    "start_index": begin, "end_index": finish, "chunk_method": "structure-v1",
+                }
+                if title:
+                    metadata["title"] = title
+                if hierarchy:
+                    metadata["section"] = " > ".join(hierarchy.values())
+                chunks.append(Document(page_content=text[begin:finish], metadata=metadata))
+                if end == len(units):
+                    break
+                next_cursor = end
+                while next_cursor > cursor + 1:
+                    candidate = next_cursor - 1
+                    if finish - units[candidate][0] > overlap:
+                        break
+                    if units[end][1] - units[candidate][0] > size:
+                        break
+                    next_cursor = candidate
+                cursor = next_cursor
     return chunks

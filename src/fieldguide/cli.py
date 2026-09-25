@@ -18,7 +18,9 @@ def parser() -> argparse.ArgumentParser:
     ingest.add_argument("--public", action="store_true", help="Declare this corpus public")
     ingest.add_argument("--chunk-size", type=int, default=1000)
     ingest.add_argument("--overlap", type=int, default=150)
-    ingest.add_argument("--chunking", choices=["sentence", "recursive"], default="sentence")
+    ingest.add_argument(
+        "--chunking", choices=["structure", "sentence", "recursive"], default="structure"
+    )
     ingest.add_argument("--embedding-model", default="sentence-transformers/all-MiniLM-L6-v2")
     export = commands.add_parser("export-pages", help="Export document pages for Spark ingestion")
     export.add_argument("folder", type=Path)
@@ -40,12 +42,16 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--k", type=int, default=5)
         command.add_argument("--source", help="Filter by source filename substring")
         command.add_argument("--retrieval", choices=["dense", "lexical", "hybrid"], default="dense")
+        command.add_argument("--rerank", action="store_true", help="Rerank candidates locally")
         command.add_argument("--json", action="store_true")
         if name in {"ask", "chat"}:
             command.add_argument("--model")
             command.add_argument("--provider", choices=["gemini", "ollama"], default="gemini")
             command.add_argument("--allow-private-api", action="store_true")
             command.add_argument("--show-context", action="store_true")
+            command.add_argument(
+                "--explain", action="store_true", help="Show verification diagnostics"
+            )
     evaluate = commands.add_parser("eval", help="Run fixed evaluation cases")
     evaluate.add_argument("--cases", type=Path, default=Path("eval/sample_questions.json"))
     evaluate.add_argument("--index", type=Path, default=Path("index/sample"))
@@ -57,11 +63,20 @@ def parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--provider", choices=["gemini", "ollama"], default="gemini")
     evaluate.add_argument("--judge-model")
     evaluate.add_argument("--k", type=int, default=5)
+    evaluate.add_argument("--retrieval", choices=["dense", "lexical", "hybrid"], default="dense")
+    evaluate.add_argument("--rerank", action="store_true")
     compare = commands.add_parser("compare-retrieval", help="Compare local indexes without an LLM")
     compare.add_argument("--indexes", nargs="+", type=Path, required=True)
     compare.add_argument("--cases", type=Path, default=Path("eval/retrieval_questions.json"))
     compare.add_argument("--k", type=int, default=3)
     compare.add_argument("--output", type=Path, default=Path("reports/retrieval"))
+    compare.add_argument("--rerank", action="store_true")
+    audit = commands.add_parser("audit", help="Inspect local index quality without an LLM")
+    audit.add_argument("--index", type=Path, default=Path("index/private"))
+    audit.add_argument(
+        "--tokens", action="store_true", help="Load embeddings to check token limits"
+    )
+    audit.add_argument("--json", action="store_true")
     overview = commands.add_parser("overview", help="Cluster chunks into local topic groups")
     overview.add_argument("--index", type=Path, default=Path("index/sample"))
     overview.add_argument("--clusters", type=int, default=4)
@@ -74,6 +89,21 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
+def rerank_model(args):
+    if getattr(args, "rerank", False):
+        from fieldguide.rerank import DEFAULT_RERANKER
+
+        return DEFAULT_RERANKER
+    return None
+
+
+def retrieve(index, question, args):
+    options = {"k": args.k, "source": args.source, "mode": args.retrieval}
+    if rerank_model(args):
+        options["rerank_model"] = rerank_model(args)
+    return index.search(question, **options)
+
+
 def print_sources(sources: list[dict], show_context: bool = False):
     for source in sources:
         page = f", page {source['page']}" if source.get("page") else ""
@@ -84,6 +114,10 @@ def print_sources(sources: list[dict], show_context: bool = False):
             f"| {source.get('score_kind', 'similarity')} {source['score']:.3f}"
         )
         if show_context:
+            if source.get("inferred_source"):
+                print(f"Document named in question: {source['inferred_source']}")
+            if source.get("section"):
+                print(f"Section: {source['section']}")
             print(source["text"] + "\n")
 
 
@@ -106,13 +140,16 @@ def run(args) -> int:
             if model not in embedders:
                 embedders[model] = embeddings(model)
             index.embedder = embedders[model]
-        frame, details = compare_retrieval(indexes, args.cases, k=args.k)
+        frame, details = compare_retrieval(
+            indexes, args.cases, k=args.k, rerank_model=rerank_model(args)
+        )
         args.output.mkdir(parents=True, exist_ok=True)
         frame.to_csv(args.output / "scores.csv", index=False)
         (args.output / "details.json").write_text(
             json.dumps(
                 {
                     "k": args.k,
+                    "rerank_model": rerank_model(args),
                     "indexes": {name: index.manifest for name, index in indexes.items()},
                     "results": details,
                 },
@@ -138,7 +175,7 @@ def run(args) -> int:
         from fieldguide.chunk_io import import_chunks
 
         documents, size, overlap = import_chunks(args.file)
-        LocalIndex.build(
+        built = LocalIndex.build(
             documents,
             args.index,
             model=args.embedding_model,
@@ -146,23 +183,24 @@ def run(args) -> int:
             chunk_size=size,
             chunk_overlap=overlap,
         )
-        print(f"Indexed {len(documents)} imported chunks into {args.index}.")
+        print(f"Indexed {len(built.documents)} imported chunks into {args.index}.")
         return 0
     if args.command == "ingest":
         from fieldguide.ingest import chunk_documents, read_documents
 
         documents, warnings = read_documents(args.folder)
         chunks = chunk_documents(documents, args.chunk_size, args.overlap, strategy=args.chunking)
-        LocalIndex.build(
+        built = LocalIndex.build(
             chunks,
             args.index,
             model=args.embedding_model,
             public=args.public,
             chunk_size=args.chunk_size,
             chunk_overlap=args.overlap,
+            ingestion_warnings=warnings,
         )
         print(
-            f"Indexed {len(chunks)} chunks from "
+            f"Indexed {len(built.documents)} chunks from "
             f"{len({d.metadata['source'] for d in documents})} documents into {args.index}."
         )
         for warning in warnings:
@@ -177,7 +215,15 @@ def run(args) -> int:
         if args.provider == "gemini":
             require_api_permission(manifest, args.allow_private_api)
     need_embeddings = args.command != "overview" and getattr(args, "retrieval", None) != "lexical"
+    if args.command == "audit":
+        need_embeddings = args.tokens
     index = LocalIndex.load(args.index, embed=need_embeddings)
+    if args.command == "audit":
+        from fieldguide.audit import audit_index, format_audit
+
+        report = audit_index(index)
+        print(json.dumps(report, indent=2) if args.json else format_audit(report))
+        return 0
     if args.command == "chat":
         return chat(index, args)
     if args.command == "overview":
@@ -200,7 +246,15 @@ def run(args) -> int:
             if args.retrieval_only or args.no_judge
             else make_judge(args.judge_model or args.model, provider=args.provider)
         )
-        frame, details = run_evaluation(index, args.cases, qa=qa, judge=judge, k=args.k)
+        frame, details = run_evaluation(
+            index,
+            args.cases,
+            qa=qa,
+            judge=judge,
+            k=args.k,
+            retrieval=args.retrieval,
+            rerank_model=rerank_model(args),
+        )
         args.output.mkdir(parents=True, exist_ok=True)
         frame.to_csv(args.output / "scores.csv", index=False)
         (args.output / "details.json").write_text(
@@ -211,6 +265,8 @@ def run(args) -> int:
                     "model": resolve_model(args.model, args.provider),
                     "judge_model": resolve_model(args.judge_model or args.model, args.provider),
                     "judge_enabled": judge is not None,
+                    "retrieval": args.retrieval,
+                    "rerank_model": rerank_model(args),
                     "k": args.k,
                     "results": details,
                 },
@@ -223,7 +279,7 @@ def run(args) -> int:
         print(report)
         (args.output / "summary.txt").write_text(report, encoding="utf-8")
         return 1 if (frame.status == "error").any() else 0
-    sources = index.search(args.question, k=args.k, source=args.source, mode=args.retrieval)
+    sources = retrieve(index, args.question, args)
     if args.command == "search":
         if args.json:
             print(json.dumps(sources, indent=2, ensure_ascii=False))
@@ -257,6 +313,9 @@ def print_answer(result, args) -> int:
                 print_sources(result.retrieved, show_context=True)
         else:
             print_sources(result.sources, show_context=args.show_context)
+        if getattr(args, "explain", False):
+            print("\nVerification diagnostics (model judgments, not verified SOP instructions):")
+            print(json.dumps(result.diagnostics, indent=2, ensure_ascii=False))
     return 0 if result.status == "verified" else 2
 
 
@@ -287,7 +346,7 @@ def chat(index, args) -> int:
                 if qa is None:
                     qa = GroundedQA(*make_chains(args.model, provider=args.provider))
             query = question[len("/search ") :].strip() if local else question
-            sources = index.search(query, k=args.k, source=args.source, mode=args.retrieval)
+            sources = retrieve(index, query, args)
             if local:
                 print_sources(sources, show_context=True)
             else:

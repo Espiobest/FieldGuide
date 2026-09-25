@@ -32,7 +32,7 @@ Question --> retrieve relevant chunks
                     Verify again or abstain
 ```
 
-The answerer and verifier are separate chains with separate prompts and structured outputs. They use the same configured Gemini model by default; they are distinct roles, not independently trained models. Verification rejects unsupported claims, altered quantities, missing qualifications, and incompatible organization or revision scopes. A second attempt receives stricter feedback. If verification still fails, the CLI abstains.
+The answerer and verifier are separate chains with separate prompts and structured outputs. They use the same configured Gemini model by default; they are distinct roles, not independently trained models. Verification checks unsupported claims, altered quantities, missing qualifications, and incompatible organization or revision scopes. Python computes approval from complete claim checks and whether the answer addresses the question. A second attempt receives stricter feedback. If it still contains both supported and rejected claims, the supported subset gets one fresh verification, including whether the shorter answer still answers the question. Otherwise the CLI abstains. Model judgments can still be wrong; verification is not a correctness guarantee.
 
 Evidence quotes must match the cited chunk, allowing whitespace differences and PDF extraction spaces before sentence punctuation. Source citations include the relative filename, stable chunk ID, and PDF page when available. Similarity scores describe retrieval similarity, not answer confidence. Verification reduces unsupported output but does not guarantee correctness; researchers should review the cited SOP before applying a procedure.
 
@@ -76,11 +76,16 @@ fieldguide overview --index index/sample --clusters 3
 
 ### Compare chunking and retrieval
 
-Ingestion uses sentence boundaries by default, with whole-sentence overlap where it fits.
+Ingestion uses structure-aware splitting by default (`--chunking structure`), preserving
+explicit Markdown/DOCX headings and sentence boundaries, with whole-sentence overlap where it fits.
 Consecutive PDF pages can share a chunk; citations retain the start and end pages.
 `--chunk-size` and `--overlap` are character limits, not token counts. Long sentences still
 require a bounded fallback split. PDF tables, headers, and multi-column layouts may need
 extraction cleanup; sentence splitting does not repair their reading order.
+PDF line-leading decimal section numbers (such as `2.2`) are recognized; other PDF headings
+are not inferred. Source filenames and available section headings
+are included in retrieval inputs but kept separate from the quotable passage text. Oversized
+chunks are split again to fit the embedding model's actual token limit, including this context.
 
 Keep separate indexes to compare against the earlier recursive splitter:
 
@@ -115,6 +120,38 @@ excerpt from that source. Compare indexes built from the same document versions 
 index can join the public comparison, but cannot measure retrieval over private SOPs.
 The supplied Spark notebook uses fixed character cuts; it does not use the local sentence
 strategy. Existing indexes only change when rebuilt.
+
+For local SOP questions, build a fresh index and optionally use a local cross-encoder reranker:
+
+```powershell
+fieldguide ingest data --index index/private-local --offline
+fieldguide audit --index index/private-local --tokens --offline
+fieldguide search "According to the vegetation SOP, what should be recorded?" --index index/private-local --retrieval hybrid --rerank
+fieldguide ask "According to the vegetation SOP, what should be recorded?" --provider ollama --index index/private-local --retrieval hybrid --rerank --show-context --explain --offline
+```
+
+The first `--rerank` run downloads `cross-encoder/ms-marco-MiniLM-L-6-v2`; subsequent runs
+can use `--offline`. Reranking runs on CPU and does not call an API. It scores up to
+`max(20, 4*k)` candidate passages and returns the best `k`; scores are relevance scores,
+not probabilities. Short overlapping sentence windows are scored within each chunk, and its
+best window score determines its rank; the original chunk remains available as evidence.
+Very long query/window pairs are capped at the reranker's 512-token window.
+Compare with and without `--rerank` using `compare-retrieval` before adopting it for a corpus.
+Both `eval` and interactive commands accept `--retrieval` and `--rerank`.
+
+An unambiguous SOP name in a question (for example, "Vegetation SOP") restricts retrieval
+to that document. If multiple revisions match, no revision is silently selected; use
+`--source` with a distinctive filename substring. Broad topic questions can retrieve several
+organizations' documents. `--show-context` identifies automatically selected documents.
+
+`audit` reports source-file hashes, duplicate passages, page-reference coverage, and saved
+extraction warnings. `--tokens` loads the embedding model to check its input limits. Older
+indexes may lack provenance and extraction warnings. Scanned pages without text still need
+local OCR before ingestion; this tool does not recover them automatically.
+
+`--explain` shows verifier decisions and the computed `approved_by_checks` result. These
+diagnostics are model judgments, not additional SOP instructions. Private reports, extracted
+passages, and labeled evaluation cases belong under the gitignored directories.
 
 For repeated questions, keep the embeddings and index in memory with an interactive session:
 

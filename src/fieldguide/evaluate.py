@@ -60,7 +60,16 @@ def token_f1(answer: str, reference: str) -> float:
     return 2 * common / (sum(a.values()) + sum(b.values())) if a or b else 1.0
 
 
-def run_evaluation(index, cases_path: Path, *, qa=None, judge=None, k: int = 5):
+def run_evaluation(
+    index,
+    cases_path: Path,
+    *,
+    qa=None,
+    judge=None,
+    k: int = 5,
+    retrieval: str = "dense",
+    rerank_model=None,
+):
     cases = [
         EvalCase.model_validate(item) for item in json.loads(cases_path.read_text(encoding="utf-8"))
     ]
@@ -72,7 +81,12 @@ def run_evaluation(index, cases_path: Path, *, qa=None, judge=None, k: int = 5):
         row = {"id": case.id, "answerable": case.answerable, "status": "error"}
         detail = {"case": case.model_dump()}
         try:
-            sources = index.search(case.question, k=k)
+            options = {"k": k}
+            if retrieval != "dense":
+                options["mode"] = retrieval
+            if rerank_model:
+                options["rerank_model"] = rerank_model
+            sources = index.search(case.question, **options)
             found = {s["source"] for s in sources}
             expected = set(case.expected_sources)
             row["source_recall"] = len(found & expected) / len(expected) if expected else None

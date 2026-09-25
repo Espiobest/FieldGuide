@@ -14,6 +14,8 @@ import faiss
 import numpy as np
 from langchain_core.documents import Document
 
+from fieldguide.retrieval_text import infer_source, retrieval_text
+
 DEFAULT_EMBEDDING = "sentence-transformers/all-MiniLM-L6-v2"
 
 
@@ -47,12 +49,16 @@ class LocalIndex:
         public: bool = False,
         chunk_size: int = 1000,
         chunk_overlap: int = 150,
+        ingestion_warnings: list[str] | None = None,
     ):
         if not documents:
             raise ValueError("Cannot build an index without document chunks.")
         embedder = embeddings(model)
+        from fieldguide.token_budget import fit_embedding_window
+
+        documents, token_limit = fit_embedding_window(documents, embedder)
         vectors = np.asarray(
-            embedder.embed_documents([doc.page_content for doc in documents]), dtype="float32"
+            embedder.embed_documents([retrieval_text(doc) for doc in documents]), dtype="float32"
         )
         faiss.normalize_L2(vectors)
         index = faiss.IndexFlatIP(vectors.shape[1])
@@ -78,9 +84,12 @@ class LocalIndex:
             "vectors_sha256": hashlib.sha256((folder / vector_name).read_bytes()).hexdigest(),
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
-            "chunk_methods": sorted({
-                doc.metadata.get("chunk_method", "legacy-recursive") for doc in documents
-            }),
+            "embedding_token_limit": token_limit,
+            "retrieval_context": True,
+            "ingestion_warnings": ingestion_warnings or [],
+            "chunk_methods": sorted(
+                {doc.metadata.get("chunk_method", "legacy-recursive") for doc in documents}
+            ),
         }
         temporary = folder / f"{generation}.manifest.tmp"
         temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -114,7 +123,7 @@ class LocalIndex:
 
     @cached_property
     def _lexical_corpus(self):
-        terms = [Counter(self._tokens(doc.page_content)) for doc in self.documents]
+        terms = [Counter(self._tokens(retrieval_text(doc))) for doc in self.documents]
         frequencies = Counter(term for counts in terms for term in counts)
         lengths = [sum(counts.values()) for counts in terms]
         average = sum(lengths) / max(len(lengths), 1)
@@ -135,8 +144,9 @@ class LocalIndex:
                 frequency = terms[position][term]
                 if not frequency:
                     continue
-                inverse = math.log(1 + (count - frequencies[term] + 0.5)
-                                   / (frequencies[term] + 0.5))
+                inverse = math.log(
+                    1 + (count - frequencies[term] + 0.5) / (frequencies[term] + 0.5)
+                )
                 normalization = 1.5 * (0.25 + 0.75 * lengths[position] / (average or 1))
                 score += inverse * frequency * 2.5 / (frequency + normalization)
             if score > 0:
@@ -144,7 +154,13 @@ class LocalIndex:
         return scores
 
     def search(
-        self, question: str, k: int = 5, source: str | None = None, *, mode: str = "dense"
+        self,
+        question: str,
+        k: int = 5,
+        source: str | None = None,
+        *,
+        mode: str = "dense",
+        rerank_model: str | None = None,
     ):
         if not question.strip() or k < 1:
             raise ValueError("Provide a nonempty question and a positive retrieval count.")
@@ -152,9 +168,12 @@ class LocalIndex:
             raise ValueError("Retrieval mode must be dense, lexical, or hybrid.")
         if mode != "lexical" and self.embedder is None:
             raise ValueError("Load the index with embeddings enabled before searching.")
+        inferred = infer_source(question, self.documents) if source is None else None
         eligible = {
-            i for i, doc in enumerate(self.documents)
-            if not source or source.casefold() in doc.metadata["source"].casefold()
+            i
+            for i, doc in enumerate(self.documents)
+            if (not source or source.casefold() in doc.metadata["source"].casefold())
+            and (not inferred or inferred == doc.metadata["source"])
         }
         if not eligible:
             return []
@@ -174,31 +193,42 @@ class LocalIndex:
         dense_order = sorted(dense, key=lambda i: (-dense[i], i))
         lexical_order = sorted(lexical, key=lambda i: (-lexical[i], i))
         pool_size = max(20, k * 4)
-        dense_rank = {position: rank for rank, position in
-                      enumerate(dense_order[:pool_size], 1)}
-        lexical_rank = {position: rank for rank, position in
-                        enumerate(lexical_order[:pool_size], 1)}
+        dense_rank = {position: rank for rank, position in enumerate(dense_order[:pool_size], 1)}
+        lexical_rank = {
+            position: rank for rank, position in enumerate(lexical_order[:pool_size], 1)
+        }
         if mode == "hybrid":
             ranking_scores = {
-                position: sum(1 / (60 + ranks[position])
-                              for ranks in (dense_rank, lexical_rank) if position in ranks)
+                position: sum(
+                    1 / (60 + ranks[position])
+                    for ranks in (dense_rank, lexical_rank)
+                    if position in ranks
+                )
                 for position in dense_rank.keys() | lexical_rank.keys()
             }
         else:
             ranking_scores = dense if mode == "dense" else lexical
-        order = sorted(ranking_scores, key=lambda i: (-ranking_scores[i], i))[:k]
+        count = pool_size if rerank_model else k
+        order = sorted(ranking_scores, key=lambda i: (-ranking_scores[i], i))[:count]
         results = []
         for position in order:
             doc = self.documents[position]
-            results.append({
-                **doc.metadata,
-                "id": f"S{len(results) + 1}",
-                "text": doc.page_content,
-                "score": ranking_scores[position],
-                "score_kind": {"dense": "cosine", "lexical": "bm25", "hybrid": "rrf"}[mode],
-                "dense_score": dense.get(position),
-                "lexical_score": lexical.get(position),
-                "dense_rank": dense_rank.get(position),
-                "lexical_rank": lexical_rank.get(position),
-            })
+            results.append(
+                {
+                    **doc.metadata,
+                    "id": f"S{len(results) + 1}",
+                    "text": doc.page_content,
+                    "score": ranking_scores[position],
+                    "score_kind": {"dense": "cosine", "lexical": "bm25", "hybrid": "rrf"}[mode],
+                    "dense_score": dense.get(position),
+                    "lexical_score": lexical.get(position),
+                    "dense_rank": dense_rank.get(position),
+                    "lexical_rank": lexical_rank.get(position),
+                    "inferred_source": inferred,
+                }
+            )
+        if rerank_model and results:
+            from fieldguide.rerank import get_reranker
+
+            return get_reranker(rerank_model).rerank(question, results, k)
         return results

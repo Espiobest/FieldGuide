@@ -44,7 +44,9 @@ class RetrievalCase(BaseModel):
         return self
 
 
-def compare_retrieval(indexes: dict, cases_path: Path, *, k: int = 3, modes=MODES):
+def compare_retrieval(
+    indexes: dict, cases_path: Path, *, k: int = 3, modes=MODES, rerank_model=None
+):
     """Return case-level measurements and retrieved passages; never invoke an LLM.
 
     Evidence recall requires each gold excerpt to occur within one retrieved chunk
@@ -68,16 +70,21 @@ def compare_retrieval(indexes: dict, cases_path: Path, *, k: int = 3, modes=MODE
             for case in cases:
                 start = time.perf_counter()
                 row = dict.fromkeys(METRICS)
-                row.update(index=name, mode=mode, k=k, id=case.id, answerable=case.answerable)
+                label = mode + "+rerank" if rerank_model else mode
+                row.update(index=name, mode=label, k=k, id=case.id, answerable=case.answerable)
                 detail = {"index": name, "mode": mode, "k": k, "case": case.model_dump()}
                 try:
-                    retrieved = index.search(case.question, k=k, mode=mode)
+                    options = {"k": k, "mode": mode}
+                    if rerank_model:
+                        options["rerank_model"] = rerank_model
+                    retrieved = index.search(case.question, **options)
                     detail["retrieved"] = retrieved
                     row["status"] = "ok"
                     if case.answerable:
                         expected = set(case.expected_sources)
                         ranks = [
-                            rank for rank, chunk in enumerate(retrieved, 1)
+                            rank
+                            for rank, chunk in enumerate(retrieved, 1)
                             if chunk["source"] in expected
                         ]
                         found = {chunk["source"] for chunk in retrieved}
@@ -85,11 +92,15 @@ def compare_retrieval(indexes: dict, cases_path: Path, *, k: int = 3, modes=MODE
                         row["source_mrr"] = 1 / min(ranks) if ranks else 0.0
                         if case.expected_evidence:
                             evidence_ranks = [
-                                next((
-                                    rank for rank, chunk in enumerate(retrieved, 1)
-                                    if chunk["source"] == evidence.source
-                                    and normalize(evidence.text) in normalize(chunk["text"])
-                                ), None)
+                                next(
+                                    (
+                                        rank
+                                        for rank, chunk in enumerate(retrieved, 1)
+                                        if chunk["source"] == evidence.source
+                                        and normalize(evidence.text) in normalize(chunk["text"])
+                                    ),
+                                    None,
+                                )
                                 for evidence in case.expected_evidence
                             ]
                             matches = [rank for rank in evidence_ranks if rank is not None]
@@ -110,7 +121,10 @@ def comparison_summary_frame(frame: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for (name, mode, k), group in frame.groupby(["index", "mode", "k"], sort=False):
         row = {
-            "index": name, "mode": mode, "k": k, "cases": len(group),
+            "index": name,
+            "mode": mode,
+            "k": k,
+            "cases": len(group),
             "errors": int((group.status == "error").sum()),
             "answerable": int(group.answerable.sum()),
             "mean_seconds": group.seconds.mean(),
