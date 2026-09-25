@@ -41,6 +41,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--json", action="store_true")
         if name in {"ask", "chat"}:
             command.add_argument("--model")
+            command.add_argument("--provider", choices=["gemini", "ollama"], default="gemini")
             command.add_argument("--allow-private-api", action="store_true")
             command.add_argument("--show-context", action="store_true")
     evaluate = commands.add_parser("eval", help="Run fixed evaluation cases")
@@ -51,6 +52,7 @@ def parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--no-judge", action="store_true")
     evaluate.add_argument("--allow-private-api", action="store_true")
     evaluate.add_argument("--model")
+    evaluate.add_argument("--provider", choices=["gemini", "ollama"], default="gemini")
     evaluate.add_argument("--judge-model")
     evaluate.add_argument("--k", type=int, default=5)
     overview = commands.add_parser("overview", help="Cluster chunks into local topic groups")
@@ -130,7 +132,8 @@ def run(args) -> int:
         from fieldguide.agents import require_api_permission
 
         manifest = json.loads((args.index / "manifest.json").read_text(encoding="utf-8"))
-        require_api_permission(manifest, args.allow_private_api)
+        if args.provider == "gemini":
+            require_api_permission(manifest, args.allow_private_api)
     index = LocalIndex.load(args.index, embed=args.command != "overview")
     if args.command == "chat":
         return chat(index, args)
@@ -142,12 +145,17 @@ def run(args) -> int:
     if args.command == "eval":
         from fieldguide.agents import GroundedQA, make_chains
         from fieldguide.evaluate import make_judge, run_evaluation, summary
+        from fieldguide.providers import resolve_model
 
-        qa = None if args.retrieval_only else GroundedQA(*make_chains(args.model))
+        qa = (
+            None
+            if args.retrieval_only
+            else GroundedQA(*make_chains(args.model, provider=args.provider))
+        )
         judge = (
             None
             if args.retrieval_only or args.no_judge
-            else make_judge(args.judge_model or args.model)
+            else make_judge(args.judge_model or args.model, provider=args.provider)
         )
         frame, details = run_evaluation(index, args.cases, qa=qa, judge=judge, k=args.k)
         args.output.mkdir(parents=True, exist_ok=True)
@@ -156,7 +164,10 @@ def run(args) -> int:
             json.dumps(
                 {
                     "index": index.manifest,
-                    "model": args.model or os.getenv("FIELDGUIDE_MODEL", "gemini-2.5-flash"),
+                    "provider": args.provider,
+                    "model": resolve_model(args.model, args.provider),
+                    "judge_model": resolve_model(args.judge_model or args.model, args.provider),
+                    "judge_enabled": judge is not None,
                     "k": args.k,
                     "results": details,
                 },
@@ -178,7 +189,9 @@ def run(args) -> int:
         return 0
     from fieldguide.agents import GroundedQA, make_chains
 
-    result = GroundedQA(*make_chains(args.model)).answer(args.question, sources)
+    result = GroundedQA(*make_chains(args.model, provider=args.provider)).answer(
+        args.question, sources
+    )
     return print_answer(result, args)
 
 
@@ -226,9 +239,10 @@ def chat(index, args) -> int:
         local = question.startswith("/search ")
         try:
             if not local:
-                require_api_permission(index.manifest, args.allow_private_api)
+                if args.provider == "gemini":
+                    require_api_permission(index.manifest, args.allow_private_api)
                 if qa is None:
-                    qa = GroundedQA(*make_chains(args.model))
+                    qa = GroundedQA(*make_chains(args.model, provider=args.provider))
             query = question[len("/search ") :].strip() if local else question
             sources = index.search(query, k=args.k, source=args.source)
             if local:
@@ -259,7 +273,7 @@ def main():
     except Exception as exc:
         print(
             f"Error ({type(exc).__name__}): operation failed. Check your model, API key, "
-            "quota, network connection, or rebuild the index.",
+            "quota, network connection, or Ollama server/model availability.",
             file=sys.stderr,
         )
         code = 1

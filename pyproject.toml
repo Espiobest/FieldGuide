@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
 overview = ["scikit-learn>=1.6,<2"]
+local = ["langchain-ollama>=1,<2"]
 
 [project.scripts]
 fieldguide = "fieldguide.cli:main"

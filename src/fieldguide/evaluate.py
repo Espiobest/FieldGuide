@@ -27,18 +27,9 @@ class Judgment(BaseModel):
     reason: str
 
 
-def make_judge(model: str | None = None):
-    import os
+def make_judge(model: str | None = None, provider: str = "gemini"):
+    from fieldguide.providers import structured_model
 
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    llm = ChatGoogleGenerativeAI(
-        model=model or os.getenv("FIELDGUIDE_MODEL", "gemini-2.5-flash"),
-        api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
-        timeout=60,
-        max_retries=2,
-        vertexai=False,
-    )
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -57,9 +48,7 @@ def make_judge(model: str | None = None):
             ),
         ]
     )
-    return prompt | llm.with_structured_output(Judgment, method="json_schema").bind(
-        automatic_function_calling={"disable": True}
-    )
+    return prompt | structured_model(Judgment, model, provider)
 
 
 def token_f1(answer: str, reference: str) -> float:

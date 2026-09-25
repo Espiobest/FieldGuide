@@ -17,11 +17,11 @@ Document folder (PDF, DOCX, Markdown, TXT)
                   |
 Question --> retrieve relevant chunks
                   |
-          Answerer (Gemini / LangChain)
+       Answerer (Gemini or local Ollama)
                   |
      Check source IDs and exact quotes
                   |
-          Verifier (Gemini / LangChain)
+       Verifier (Gemini or local Ollama)
                   |
          all claims supported?
            /              \
@@ -58,7 +58,7 @@ python -m pip install -e '.[dev,overview]'
 cp .env.example .env
 ```
 
-Set `GEMINI_API_KEY` in `.env` to enable answers and live evaluation. `GOOGLE_API_KEY` is also accepted. `FIELDGUIDE_MODEL` defaults to `gemini-2.5-flash`; `--model` overrides it for a command. Local ingestion, search, clustering, and retrieval-only evaluation need no API key. The embedding model downloads on first use, then runs locally on CPU; PyTorch makes the initial installation substantial. The `dev` extra supplies tests and linting; `overview` supplies scikit-learn clustering.
+For Gemini answers and live evaluation, set `GEMINI_API_KEY` in `.env`. `GOOGLE_API_KEY` is also accepted. `FIELDGUIDE_MODEL` defaults to `gemini-2.5-flash`; `--model` overrides it for a command. Gemini remains the default provider. Local ingestion, search, clustering, and retrieval-only evaluation need no API key. The embedding model downloads on first use, then runs locally on CPU; PyTorch makes the initial installation substantial. The `dev` extra supplies tests and linting; `overview` supplies scikit-learn clustering.
 
 `requirements.lock` records the versions used for local validation. To reproduce those versions, add `-c requirements.lock` to the editable install command. The lock was captured on Windows with Python 3.11; installation on other platforms is covered separately by CI.
 
@@ -108,7 +108,7 @@ fieldguide search "What should an intern record at each plot?" --index index/pri
 
 Ingestion recursively reads text PDFs, DOCX, Markdown, and UTF-8 text. Scanned PDFs require OCR outside this tool. Ingestion reports unreadable or empty documents. Default chunks are 1,000 characters with 150 characters of overlap; adjust with `--chunk-size` and `--overlap`. Rerun ingestion after changing documents. You can pass any folder path, including a folder outside the repository; use an index under `index/` to keep generated files ignored.
 
-Private indexes are the default. `search` remains local, while `ask` sends the question and retrieved excerpts to Google's Gemini API. Live evaluation also sends references and answer context to the judge. Only enable these calls when your organization permits that processing:
+Private indexes are the default. `search` remains local. With the default Gemini provider, `ask` sends the question and retrieved excerpts to Google's API. Live evaluation also sends references and answer context to the judge. Only enable these calls when your organization permits that processing:
 
 ```bash
 fieldguide ask "What should an intern record at each plot?" --index index/private --allow-private-api
@@ -117,6 +117,29 @@ fieldguide ask "What should an intern record at each plot?" --index index/privat
 The equivalent persistent setting is `FIELDGUIDE_ALLOW_PRIVATE_API=true` in `.env`. The `--public` ingestion flag declares that the corpus is public; it does not anonymize anything. LangChain tracing is disabled by the CLI.
 
 `data/`, `index/`, `reports/`, and `.env` are gitignored. Indexes and evaluation reports contain source content and should be stored alongside the private corpus. Source metadata uses paths relative to the input folder.
+
+## Use a local model with Ollama
+
+Install [Ollama](https://ollama.com/download), keep its local server running, and install FieldGuide's optional local provider:
+
+```powershell
+python -m pip install -e ".[local]"
+ollama pull qwen3:4b
+fieldguide ask "How big is the training quadrat?" --provider ollama --index index/sample
+```
+
+`--provider ollama` uses the local server at `http://127.0.0.1:11434` for both the answerer and verifier. The default model is `qwen3:4b`; set `FIELDGUIDE_OLLAMA_MODEL` in `.env` or pass `--model` to select another installed local model. Gemini credentials and `--allow-private-api` are not needed for this provider. Private questions and retrieved excerpts stay on your computer.
+
+For repeated private SOP questions and public evaluation:
+
+```powershell
+fieldguide chat --provider ollama --index index/private --source vegetation --offline
+fieldguide eval --provider ollama --index index/sample --output reports/ollama --offline
+```
+
+Evaluation uses Ollama for the judge as well. Local generation uses no Gemini quota, but speed and answer quality depend on the model and hardware. The same citation checks, verification, and abstention rules apply. Inspect evaluation results and source passages before relying on answers for fieldwork.
+
+Use `--offline` only after the embedding model has been downloaded; it controls embedding downloads, not which answer provider is selected. Ollama must already have the requested model downloaded.
 
 ## Evaluate
 
@@ -137,12 +160,12 @@ Each run prints a pandas table and writes `scores.csv`, `details.json`, and `sum
 | Behavior correct | Verified response for an answerable case, or abstention for an unanswerable case; errors count as failures. This checks response behavior, not factual correctness. |
 | Reference F1 | Token overlap with the reference for answerable cases. Paraphrases can score poorly, and overlap does not establish grounding. |
 | Quote validity | Exact evidence quote and source checks passed for verified answers. This is a mechanical check, not semantic faithfulness. |
-| Faithfulness | Optional Gemini judge score against cited context, for verified answers only. Abstentions do not inflate the mean. |
+| Faithfulness | Optional model judge score against cited context, for verified answers only. Abstentions do not inflate the mean. |
 | Correctness | Optional judge score against the reference for verified answers; answerable abstentions and errors receive zero, expected abstentions receive one. |
 
 Summary means report their own `n` because metrics have different denominators; inspect the case table and error count alongside every mean. `--retrieval-only` does not generate or verify answers and cannot measure faithfulness. `--no-judge` still runs the answerer and verifier but omits the separate evaluation judge. The judge defaults to the answering model, so its errors may be correlated with the answerer's. This small synthetic suite is a reproducible smoke evaluation, not evidence of performance on real SOPs.
 
-For a private evaluation, author cases with the same JSON schema under `data/` and use `--cases data/questions.json --index index/private --output reports/private`. Live private evaluation requires the same API opt-in. Keep references scoped to the correct organization and SOP revision, and include unanswerable questions.
+For a private evaluation, author cases with the same JSON schema under `data/` and use `--cases data/questions.json --index index/private --output reports/private`. Private evaluation with Gemini requires the same API opt-in; `--provider ollama` keeps it local. Keep references scoped to the correct organization and SOP revision, and include unanswerable questions.
 
 ## Repository and checks
 
@@ -163,6 +186,6 @@ ruff check src tests
 pytest -q
 ```
 
-CI runs these checks without Gemini credentials or an embedding-model download. Unit tests cover verification and retrieval mechanics with test doubles; they do not replace a live Gemini run or evaluation against the team's real SOPs.
+CI runs these checks without Gemini credentials, an Ollama server, or an embedding-model download. Unit tests cover verification and retrieval mechanics with test doubles; they do not replace a live model run or evaluation against the team's real SOPs.
 
 Integration references: [LangChain's Gemini integration](https://docs.langchain.com/oss/python/integrations/chat/google_generative_ai), [local sentence-transformer embeddings](https://docs.langchain.com/oss/python/integrations/embeddings/sentence_transformers), and [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output).

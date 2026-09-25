@@ -80,18 +80,9 @@ Do not rewrite the answer. Give specific feedback for rejected claims.
 """
 
 
-def make_chains(model: str | None = None):
-    from langchain_google_genai import ChatGoogleGenerativeAI
+def make_chains(model: str | None = None, provider: str = "gemini"):
+    from fieldguide.providers import structured_model
 
-    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not key:
-        raise ValueError(
-            "Set GEMINI_API_KEY in .env or the environment to ask or evaluate answers."
-        )
-    model = model or os.getenv("FIELDGUIDE_MODEL", "gemini-2.5-flash")
-    options = {"model": model, "api_key": key, "timeout": 60, "max_retries": 2, "vertexai": False}
-    answerer = ChatGoogleGenerativeAI(**options)
-    verifier = ChatGoogleGenerativeAI(**options)
     answer_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", ANSWER_PROMPT),
@@ -108,14 +99,8 @@ def make_chains(model: str | None = None):
         ]
     )
     return (
-        answer_prompt
-        | answerer.with_structured_output(Draft, method="json_schema").bind(
-            automatic_function_calling={"disable": True}
-        ),
-        verify_prompt
-        | verifier.with_structured_output(Verdict, method="json_schema").bind(
-            automatic_function_calling={"disable": True}
-        ),
+        answer_prompt | structured_model(Draft, model, provider),
+        verify_prompt | structured_model(Verdict, model, provider),
     )
 
 
