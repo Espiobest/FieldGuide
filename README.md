@@ -237,6 +237,7 @@ Each run prints a pandas table and writes `scores.csv`, `details.json`, and `sum
 | Metric | Meaning and denominator |
 | --- | --- |
 | Source recall | Fraction of expected filenames retrieved per case; mean excludes cases with no expected sources. Filename retrieval does not establish that the relevant passage was retrieved. |
+| Answer source recall | Fraction of expected filenames cited in a verified answer; distinguishes retrieval from using the intended SOP. |
 | Behavior correct | Verified response for an answerable case, or abstention for an unanswerable case; errors count as failures. This checks response behavior, not factual correctness. |
 | Reference F1 | Token overlap with the reference for answerable cases. Paraphrases can score poorly, and overlap does not establish grounding. |
 | Quote validity | Exact evidence quote and source checks passed for verified answers. This is a mechanical check, not semantic faithfulness. |

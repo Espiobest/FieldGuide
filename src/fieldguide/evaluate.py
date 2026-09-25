@@ -105,6 +105,10 @@ def run_evaluation(
                     row["reference_f1"] = token_f1(
                         " ".join(c.text for c in result.claims), case.reference
                     )
+                    cited = {source["source"] for source in result.sources}
+                    row["answer_source_recall"] = (
+                        len(expected & cited) / len(expected) if expected else None
+                    )
                 if result.status == "verified":
                     row["quote_validity"] = float(
                         not evidence_errors(Draft(answerable=True, claims=result.claims), sources)
@@ -135,6 +139,7 @@ def run_evaluation(
                     row["correctness"] = 0.0
                 if case.answerable:
                     row["reference_f1"] = 0.0
+                    row["answer_source_recall"] = 0.0
         row["seconds"] = round(time.monotonic() - start, 2)
         rows.append(row)
         details.append(detail)
@@ -145,6 +150,7 @@ def summary(frame: pd.DataFrame) -> str:
     lines = [frame.to_string(index=False, float_format=lambda x: f"{x:.2f}"), ""]
     for column in (
         "source_recall",
+        "answer_source_recall",
         "behavior_correct",
         "reference_f1",
         "quote_validity",

@@ -111,3 +111,42 @@ def test_quote_validity_checks_evidence_instead_of_status(tmp_path):
     )
     frame, _ = run_evaluation(Corpus(), cases, qa=QA())
     assert frame.iloc[0].quote_validity == 0.0
+
+
+def test_answer_source_recall_detects_citing_the_wrong_sop(tmp_path):
+    class Corpus:
+        def search(self, question, k, *, mode="dense"):
+            return [
+                {"id": "S1", "source": "Vegetation SOP.pdf", "text": "Record percent cover."},
+                {"id": "S2", "source": "Marsh Plan.pdf", "text": "Record species above 5%."},
+            ]
+
+    class QA:
+        def answer(self, question, sources):
+            return Answer(
+                question=question,
+                status="verified",
+                text="Record species above 5%. [S2]",
+                attempts=1,
+                sources=[sources[1]],
+                retrieved=sources,
+                claims=[],
+            )
+
+    cases = tmp_path / "cases.json"
+    cases.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "a",
+                    "question": "What should be recorded?",
+                    "reference": "Record percent cover.",
+                    "expected_sources": ["Vegetation SOP.pdf"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    frame, _ = run_evaluation(Corpus(), cases, qa=QA())
+    assert frame.iloc[0].source_recall == 1.0
+    assert frame.iloc[0].answer_source_recall == 0.0
