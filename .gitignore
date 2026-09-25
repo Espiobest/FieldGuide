@@ -19,3 +19,4 @@ dist/
 *.pdf
 *.docx
 .DS_Store
+eval/expanded_questions.json
