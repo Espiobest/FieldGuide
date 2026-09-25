@@ -16,7 +16,7 @@ class Index:
     def __init__(self, chunks):
         self.chunks = chunks
 
-    def search(self, question, *, k, mode):
+    def search(self, question, *, k, mode, route_documents=True):
         if mode == "dense":
             raise RuntimeError("Do not include private exception text in reports.")
         return self.chunks[:k]

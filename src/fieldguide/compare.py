@@ -74,7 +74,7 @@ def compare_retrieval(
                 row.update(index=name, mode=label, k=k, id=case.id, answerable=case.answerable)
                 detail = {"index": name, "mode": mode, "k": k, "case": case.model_dump()}
                 try:
-                    options = {"k": k, "mode": mode}
+                    options = {"k": k, "mode": mode, "route_documents": False}
                     if rerank_model:
                         options["rerank_model"] = rerank_model
                     retrieved = index.search(case.question, **options)

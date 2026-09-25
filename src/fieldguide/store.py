@@ -161,6 +161,7 @@ class LocalIndex:
         *,
         mode: str = "dense",
         rerank_model: str | None = None,
+        route_documents: bool = True,
     ):
         if not question.strip() or k < 1:
             raise ValueError("Provide a nonempty question and a positive retrieval count.")
@@ -208,7 +209,19 @@ class LocalIndex:
             }
         else:
             ranking_scores = dense if mode == "dense" else lexical
-        count = pool_size if rerank_model else k
+        cross_document = bool(
+            re.search(
+                r"\b(compare|comparison|versus|vs\.?|differences?|across|"
+                r"all (?:the )?(?:organizations|orgs|sops|documents)|"
+                r"how many (?:organizations|orgs|sops|documents))\b",
+                question,
+                re.IGNORECASE,
+            )
+        )
+        should_route = (
+            route_documents and k >= 3 and not source and not inferred and not cross_document
+        )
+        count = pool_size if rerank_model or should_route else k
         order = sorted(ranking_scores, key=lambda i: (-ranking_scores[i], i))[:count]
         results = []
         for position in order:
@@ -227,8 +240,16 @@ class LocalIndex:
                     "inferred_source": inferred,
                 }
             )
+        if should_route and len(results) >= 3:
+            votes = Counter(item["source"] for item in results[:3])
+            selected = next(item["source"] for item in results[:3] if votes[item["source"]] >= 2)
+            results = [item for item in results if item["source"] == selected]
+            for item in results:
+                item["routed_source"] = selected
+                item["routing_method"] = "top_three_source_vote"
+                item["routing_votes"] = votes[selected]
         if rerank_model and results:
             from fieldguide.rerank import get_reranker
 
             return get_reranker(rerank_model).rerank(question, results, k)
-        return results
+        return results[:k]

@@ -71,3 +71,44 @@ def test_lexical_statistics_reused(index):
 def test_unknown_mode_rejected(index):
     with pytest.raises(ValueError, match="mode"):
         index.search("plant", mode="unknown")
+
+
+def routed_index():
+    sources = ["vegetation.pdf"] * 3 + ["water.pdf"] * 2
+    documents = [
+        Document(page_content=f"Survey procedure passage {position}.", metadata={"source": source})
+        for position, source in enumerate(sources)
+    ]
+    vectors = np.tile(np.array([[1.0, 0.0]], dtype="float32"), (len(documents), 1))
+    store = faiss.IndexFlatIP(2)
+    store.add(vectors)
+    result = LocalIndex(store, documents, {}, Embedder())
+    result._lexical_scores = lambda question, eligible: {
+        position: float(len(documents) - position) for position in eligible
+    }
+    return result
+
+
+def test_automatic_source_route_uses_top_three_majority():
+    results = routed_index().search("survey procedure", k=3, mode="hybrid")
+    assert [result["source"] for result in results] == ["vegetation.pdf"] * 3
+    assert all(result["routing_method"] == "top_three_source_vote" for result in results)
+    assert all(result["routing_votes"] >= 2 for result in results)
+
+
+def test_explicit_source_overrides_automatic_source_route():
+    results = routed_index().search("survey procedure", k=2, source="water", mode="hybrid")
+    assert [result["source"] for result in results] == ["water.pdf"] * 2
+    assert all("routed_source" not in result for result in results)
+
+
+def test_comparison_question_keeps_results_from_multiple_sources():
+    results = routed_index().search("Compare survey procedures", k=5, mode="hybrid")
+    assert {result["source"] for result in results} == {"vegetation.pdf", "water.pdf"}
+
+
+def test_automatic_source_route_can_be_disabled():
+    results = routed_index().search(
+        "survey procedure", k=5, mode="hybrid", route_documents=False
+    )
+    assert {result["source"] for result in results} == {"vegetation.pdf", "water.pdf"}

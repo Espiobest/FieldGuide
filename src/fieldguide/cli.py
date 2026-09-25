@@ -109,6 +109,11 @@ def retrieve(index, question, args):
 
 
 def print_sources(sources: list[dict], show_context: bool = False):
+    if sources and sources[0].get("routed_source"):
+        print(
+            f"Automatically selected document: {sources[0]['routed_source']} "
+            f"({sources[0]['routing_votes']}/3 top-ranked chunks)"
+        )
     for source in sources:
         page = f", page {source['page']}" if source.get("page") else ""
         if source.get("page_end") and source["page_end"] != source.get("page"):
