@@ -367,3 +367,35 @@ def test_supported_part_of_why_answer_survives_unsupported_extra_claim():
     assert result.text == "Photos record marsh condition and provide insight into change. [S1]"
     assert len(verifier.calls) == 2
     assert result.diagnostics[0]["verdict"]["checks"][1]["supported"] is False
+
+
+def test_reduced_answer_reapplies_why_rule(monkeypatch):
+    import fieldguide.agents as agents
+
+    calls = []
+    original = agents.enforce_rationale_evidence
+
+    def spy(question, draft, verdict):
+        calls.append(len(draft.claims))
+        return original(question, draft, verdict)
+
+    monkeypatch.setattr(agents, "enforce_rationale_evidence", spy)
+    reason = "Use a 1 m quadrat so that cover is comparable."
+    source = {**SOURCES[0], "text": reason}
+    proposal = Draft(
+        answerable=True,
+        claims=[
+            draft(text=reason, quote=reason).claims[0],
+            draft(text="Use 9 m.", quote=reason).claims[0],
+        ],
+    )
+    mixed = verdict(
+        checks=[
+            ClaimCheck(claim_index=0, supported=True, reason="Correct reason"),
+            ClaimCheck(claim_index=1, supported=False, reason="Wrong size"),
+        ]
+    )
+    GroundedQA(FakeChain(proposal), FakeChain(mixed, verdict()), max_attempts=1).answer(
+        "Why use a quadrat?", [source]
+    )
+    assert calls == [2, 1]

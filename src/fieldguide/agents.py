@@ -293,6 +293,7 @@ class GroundedQA:
                                 }
                             )
                         )
+                    verdict = enforce_rationale_evidence(question, draft, verdict)
                     approved = verdict_passes(verdict, len(draft.claims))
                     diagnostics.append(
                         {
