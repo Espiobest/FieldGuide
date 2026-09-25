@@ -10,6 +10,7 @@ from fieldguide.agents import (
     Verdict,
     evidence_errors,
     require_api_permission,
+    verdict_passes,
 )
 
 SOURCES = [
@@ -46,7 +47,6 @@ def draft(text="Use a 1 m quadrat.", quote="Use a 1 m quadrat.", source="S1"):
 
 def verdict(approved=True, checks=None):
     return Verdict(
-        approved=approved,
         answers_question=True,
         checks=checks
         if checks is not None
@@ -157,3 +157,103 @@ def test_quote_failure_explains_abstention():
         FakeChain(draft(quote="Invented"), draft(quote="Invented")), FakeChain()
     ).answer("What size?", SOURCES)
     assert result.abstention_reason == "invalid_citations"
+
+
+def test_approval_is_derived_without_redundant_model_flag():
+    response = {
+        "approved": False,
+        "answers_question": True,
+        "checks": [{"claim_index": 0, "supported": True, "reason": "Explicit in source."}],
+        "feedback": "All claims are supported.",
+    }
+    assert "approved" not in Verdict.model_json_schema()["properties"]
+    result = GroundedQA(FakeChain(draft()), FakeChain(response)).answer("What size?", SOURCES)
+    assert result.status == "verified"
+    assert result.diagnostics[-1]["approved_by_checks"] is True
+    assert "approved" not in result.diagnostics[-1]["verdict"]
+
+
+@pytest.mark.parametrize("indices,count", [([], 0), ([0, 0], 2), ([0], 2), ([0, 2], 2)])
+def test_approval_requires_nonempty_complete_unique_checks(indices, count):
+    response = verdict(
+        checks=[ClaimCheck(claim_index=i, supported=True, reason="Supported") for i in indices]
+    )
+    assert not verdict_passes(response, count)
+
+
+def test_supported_but_irrelevant_answer_is_rejected():
+    response = verdict().model_copy(update={"answers_question": False})
+    result = GroundedQA(FakeChain(draft()), FakeChain(response), max_attempts=1).answer(
+        "What units are water levels recorded in?", SOURCES
+    )
+    assert result.status == "abstained"
+    assert result.diagnostics[-1]["approved_by_checks"] is False
+
+
+def test_rejected_historical_generalization_still_abstains():
+    sources = [{**SOURCES[0], "text": "Sampling occurred in August 2024."}]
+    proposal = draft(text="Sample every August.", quote=sources[0]["text"])
+    rejected = Verdict(
+        answers_question=True,
+        checks=[
+            ClaimCheck(
+                claim_index=0,
+                supported=False,
+                reason="A dated event does not establish an annual requirement.",
+            )
+        ],
+        feedback="Keep the observation's date and past tense.",
+    )
+    result = GroundedQA(FakeChain(proposal), FakeChain(rejected), max_attempts=1).answer(
+        "When should sampling occur?", sources
+    )
+    assert result.status == "abstained"
+    assert not result.claims
+    assert result.diagnostics[-1]["approved_by_checks"] is False
+
+
+@pytest.mark.parametrize("recheck_supported", [True, False])
+def test_reduced_answer_requires_fresh_verification(recheck_supported):
+    proposal = Draft(answerable=True, claims=[draft().claims[0], draft(text="Use 9 m.").claims[0]])
+    mixed = verdict(
+        checks=[
+            ClaimCheck(claim_index=0, supported=True, reason="Correct size"),
+            ClaimCheck(claim_index=1, supported=False, reason="Wrong size"),
+        ]
+    )
+    verifier = FakeChain(mixed, verdict(recheck_supported))
+    result = GroundedQA(FakeChain(proposal), verifier, max_attempts=1).answer("What size?", SOURCES)
+    assert result.status == ("verified" if recheck_supported else "abstained")
+    assert "9 m" not in result.text
+    assert len(verifier.calls) == 2
+    assert result.diagnostics[-1]["stage"] == "verify_reduced_answer"
+    assert result.diagnostics[-1]["kept_claim_indices"] == [0]
+
+
+def test_reduced_answer_cannot_omit_required_part_of_question():
+    proposal = Draft(answerable=True, claims=[draft().claims[0], draft(text="Use 9 m.").claims[0]])
+    mixed = verdict(
+        checks=[
+            ClaimCheck(claim_index=0, supported=True, reason="Size is supported"),
+            ClaimCheck(claim_index=1, supported=False, reason="Does not answer units"),
+        ]
+    )
+    incomplete = verdict().model_copy(update={"answers_question": False})
+    result = GroundedQA(FakeChain(proposal), FakeChain(mixed, incomplete), max_attempts=1).answer(
+        "What size quadrat and what water level units?", SOURCES
+    )
+    assert result.status == "abstained"
+
+
+def test_duplicate_checks_do_not_trigger_reduced_answer():
+    proposal = Draft(answerable=True, claims=[draft().claims[0], draft(text="Use 9 m.").claims[0]])
+    malformed = verdict(
+        checks=[
+            ClaimCheck(claim_index=0, supported=True, reason="Supported"),
+            ClaimCheck(claim_index=0, supported=False, reason="Conflicting duplicate"),
+        ]
+    )
+    verifier = FakeChain(malformed)
+    result = GroundedQA(FakeChain(proposal), verifier, max_attempts=1).answer("What size?", SOURCES)
+    assert result.status == "abstained"
+    assert len(verifier.calls) == 1

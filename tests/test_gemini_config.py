@@ -11,7 +11,7 @@ def test_structured_chains_disable_automatic_function_calling(monkeypatch):
     responses = iter(
         [
             {"answerable": False, "claims": []},
-            {"approved": False, "answers_question": False, "checks": [], "feedback": "No evidence"},
+            {"answers_question": False, "checks": [], "feedback": "No evidence"},
             {"faithfulness": 0, "correctness": 0, "reason": "No evidence"},
         ]
     )

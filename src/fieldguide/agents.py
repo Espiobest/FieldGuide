@@ -34,7 +34,6 @@ class ClaimCheck(BaseModel):
 
 
 class Verdict(BaseModel):
-    approved: bool
     answers_question: bool
     checks: list[ClaimCheck]
     feedback: str
@@ -49,6 +48,7 @@ class Answer(BaseModel):
     retrieved: list[dict]
     claims: list[Claim] = Field(default_factory=list)
     checks: list[ClaimCheck] = Field(default_factory=list)
+    diagnostics: list[dict] = Field(default_factory=list)
     abstention_reason: (
         Literal["no_context", "insufficient_evidence", "invalid_citations", "verification_rejected"]
         | None
@@ -63,8 +63,15 @@ and revision scope. Do not merge different organizations' procedures into a sing
 If sources disagree, attribute each procedure and explain the disagreement using evidence.
 Return a concise list of atomic claims. Every claim needs one or more exact evidence quotes
 and source IDs from the retrieved context. Do not embed citation labels in claim text.
+Use the fewest claims needed to answer the question. You do not need to use every source.
+Prefer the passage that directly answers the question; omit unrelated procedures and
+historical examples unless the question asks for them. Explicitly name each document when
+comparing different procedures. Do not apply instructions for one activity to another.
 If the context does not establish the requested answer, set answerable=false and claims=[].
 Do not infer absence of a rule from its absence in these excerpts.
+Distinguish procedures from historical observations: a report that sampling occurred in
+August 2024 does not establish that sampling should occur every August. Keep reported
+events in the past tense and preserve their date and site scope.
 On retry, remove unsupported details and narrow the answer to explicit source statements.
 """
 
@@ -74,8 +81,13 @@ Check EVERY claim against its cited sources, not general knowledge or uncited so
 Exact quoted text alone does not prove that a claim follows from it. Reject changed numbers,
 units, negation, invented steps, missing conditions, incompatible organization/revision
 scopes, and conclusions based on silence. Check that the answer addresses the question.
-Return exactly one check per claim (zero-based index). Approve only when all claims are
-fully supported by their cited evidence and the answer addresses the question.
+Check the activity as well as the words: bird-survey instructions are not vegetation-survey
+instructions merely because both appear in the same retrieved passage.
+Reject a claim that turns a dated observation into a general instruction. For example,
+"sampling occurred in August 2024" supports that historical event, not "sample every August".
+Return exactly one check per claim (zero-based index). Mark supported=true only when the
+claim follows fully from its cited evidence. Set answers_question independently; the
+application computes the final approval from these checks.
 Do not rewrite the answer. Give specific feedback for rejected claims.
 """
 
@@ -128,7 +140,7 @@ def evidence_errors(draft: Draft, sources: list[dict]) -> list[str]:
 
 def verdict_passes(verdict: Verdict, count: int) -> bool:
     return (
-        verdict.approved
+        count > 0
         and verdict.answers_question
         and len(verdict.checks) == count
         and {c.claim_index for c in verdict.checks} == set(range(count))
@@ -144,12 +156,28 @@ class GroundedQA:
         self.max_attempts = max_attempts
 
     def answer(self, question: str, sources: list[dict]) -> Answer:
+        diagnostics = []
         fallback = dict(
-            question=question, status="abstained", text=ABSTENTION, sources=[], retrieved=sources
+            question=question,
+            status="abstained",
+            text=ABSTENTION,
+            sources=[],
+            retrieved=sources,
+            diagnostics=diagnostics,
         )
         if not sources:
             return Answer(**fallback, attempts=0, abstention_reason="no_context")
-        context = json.dumps(sources, ensure_ascii=False)
+        context = json.dumps(
+            [
+                {
+                    key: source[key]
+                    for key in ("id", "source", "page", "page_end", "title", "section", "text")
+                    if key in source
+                }
+                for source in sources
+            ],
+            ensure_ascii=False,
+        )
         feedback = "First attempt."
         reason = "verification_rejected"
         for attempt in range(1, self.max_attempts + 1):
@@ -164,11 +192,19 @@ class GroundedQA:
                     )
                 )
             if not draft.answerable:
+                diagnostics.append(
+                    {
+                        "attempt": attempt,
+                        "stage": "answerer",
+                        "reason": "Insufficient evidence reported by the answerer.",
+                    }
+                )
                 return Answer(
                     **fallback, attempts=attempt, abstention_reason="insufficient_evidence"
                 )
             errors = evidence_errors(draft, sources)
             if errors:
+                diagnostics.append({"attempt": attempt, "stage": "citations", "errors": errors})
                 reason = "invalid_citations"
                 feedback = "Stricter retry: " + " ".join(errors)
                 continue
@@ -182,7 +218,43 @@ class GroundedQA:
                         }
                     )
                 )
-            if verdict_passes(verdict, len(draft.claims)):
+            approved = verdict_passes(verdict, len(draft.claims))
+            diagnostics.append(
+                {
+                    "attempt": attempt,
+                    "stage": "verifier",
+                    "verdict": verdict.model_dump(),
+                    "approved_by_checks": approved,
+                }
+            )
+            complete = len(verdict.checks) == len(draft.claims) and {
+                c.claim_index for c in verdict.checks
+            } == set(range(len(draft.claims)))
+            if not approved and attempt == self.max_attempts and complete:
+                kept = sorted(c.claim_index for c in verdict.checks if c.supported)
+                if 0 < len(kept) < len(draft.claims):
+                    draft = Draft(answerable=True, claims=[draft.claims[i] for i in kept])
+                    with tracing_context(enabled=False):
+                        verdict = Verdict.model_validate(
+                            self.verifier.invoke(
+                                {
+                                    "question": question,
+                                    "context": context,
+                                    "draft": draft.model_dump_json(),
+                                }
+                            )
+                        )
+                    approved = verdict_passes(verdict, len(draft.claims))
+                    diagnostics.append(
+                        {
+                            "attempt": attempt,
+                            "stage": "verify_reduced_answer",
+                            "kept_claim_indices": kept,
+                            "verdict": verdict.model_dump(),
+                            "approved_by_checks": approved,
+                        }
+                    )
+            if approved:
                 used = {e.source_id for c in draft.claims for e in c.evidence}
                 lines = []
                 for claim in draft.claims:
@@ -197,6 +269,7 @@ class GroundedQA:
                     retrieved=sources,
                     claims=draft.claims,
                     checks=verdict.checks,
+                    diagnostics=diagnostics,
                 )
             reason = "verification_rejected"
             feedback = (
