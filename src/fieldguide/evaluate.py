@@ -69,6 +69,7 @@ def run_evaluation(
     k: int = 5,
     retrieval: str = "hybrid",
     rerank_model=None,
+    pacer=None,
 ):
     cases = [
         EvalCase.model_validate(item) for item in json.loads(cases_path.read_text(encoding="utf-8"))
@@ -78,6 +79,7 @@ def run_evaluation(
     rows, details = [], []
     for case in cases:
         start = time.monotonic()
+        idle_start = pacer.idle_seconds if pacer else 0.0
         row = {"id": case.id, "answerable": case.answerable, "status": "error"}
         detail = {"case": case.model_dump()}
         try:
@@ -140,7 +142,8 @@ def run_evaluation(
                 if case.answerable:
                     row["reference_f1"] = 0.0
                     row["answer_source_recall"] = 0.0
-        row["seconds"] = round(time.monotonic() - start, 2)
+        idle = (pacer.idle_seconds - idle_start) if pacer else 0.0
+        row["seconds"] = round(time.monotonic() - start - idle, 2)
         rows.append(row)
         details.append(detail)
     return pd.DataFrame(rows), details

@@ -69,6 +69,10 @@ def parser() -> argparse.ArgumentParser:
         "--retrieval", choices=["dense", "lexical", "hybrid"], default="hybrid"
     )
     evaluate.add_argument("--rerank", action="store_true")
+    evaluate.add_argument(
+        "--call-delay", type=float, default=0.0, help="Minimum seconds between model calls"
+    )
+    evaluate.add_argument("--max-retries", type=int, default=6, help="Retries on rate limits")
     compare = commands.add_parser("compare-retrieval", help="Compare local indexes without an LLM")
     compare.add_argument("--indexes", nargs="+", type=Path, required=True)
     compare.add_argument("--cases", type=Path, default=Path("eval/retrieval_questions.json"))
@@ -244,16 +248,20 @@ def run(args) -> int:
         from fieldguide.agents import GroundedQA, make_chains
         from fieldguide.evaluate import make_judge, run_evaluation, summary
         from fieldguide.providers import resolve_model
+        from fieldguide.throttle import Pacer
 
+        pacer = Pacer(args.call_delay, max_retries=args.max_retries)
         qa = (
             None
             if args.retrieval_only
-            else GroundedQA(*make_chains(args.model, provider=args.provider))
+            else GroundedQA(
+                *(pacer.wrap(chain) for chain in make_chains(args.model, provider=args.provider))
+            )
         )
         judge = (
             None
             if args.retrieval_only or args.no_judge
-            else make_judge(args.judge_model or args.model, provider=args.provider)
+            else pacer.wrap(make_judge(args.judge_model or args.model, provider=args.provider))
         )
         frame, details = run_evaluation(
             index,
@@ -263,6 +271,7 @@ def run(args) -> int:
             k=args.k,
             retrieval=args.retrieval,
             rerank_model=rerank_model(args),
+            pacer=pacer,
         )
         args.output.mkdir(parents=True, exist_ok=True)
         frame.to_csv(args.output / "scores.csv", index=False)
@@ -270,6 +279,9 @@ def run(args) -> int:
             json.dumps(
                 {
                     "index": index.manifest,
+                    "model_calls": pacer.calls,
+                    "rate_limit_retries": pacer.rate_limit_retries,
+                    "call_delay": args.call_delay,
                     "provider": args.provider,
                     "model": resolve_model(args.model, args.provider),
                     "judge_model": resolve_model(args.judge_model or args.model, args.provider),
